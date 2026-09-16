@@ -60,7 +60,7 @@ describe('Local workspace API', () => {
     expect(await fs.readFile(path.join(articles, 'new.md'), 'utf8')).toBe('# New');
   });
   it('persists per-article theme settings across server restarts', async () => {
-    const settings = { ...defaultSettings(builtInThemes[2]), fontSize: 18, showMeta: false };
+    const settings = { ...defaultSettings(builtInThemes.find((theme) => theme.id === 'sunset')), fontSize: 18, showMeta: false };
     await request(instance.app).put('/api/article-settings').send({ path: 'article.md', settings }).expect(200);
     await instance.close();
     instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
@@ -84,12 +84,13 @@ describe('Local workspace API', () => {
   });
   it('extracts, stores, reloads and removes a custom theme', async () => {
     const response = await request(instance.app).post('/api/themes/extract').send({ html: '<article style="font-size:16px;color:#444"><h2 style="color:#8a70a8">这是一篇文章</h2><p>正文里的小小片刻，都值得我们认真记住和表达。</p></article>' }).expect(200);
-    const candidate = { ...response.body.theme, name: '我的测试主题' };
+    const candidate = { ...response.body.theme, name: '我的测试主题', codeStyle: 'dark' };
     const saved = await request(instance.app).post('/api/themes').send({ theme: candidate }).expect(201);
     expect(saved.body.theme.custom).toBe(true);
+    expect(saved.body.theme.codeStyle).toBe('dark');
     const list = await request(instance.app).get('/api/themes').expect(200);
-    expect(list.body.themes).toHaveLength(9);
-    expect(list.body.themes[8].name).toBe('我的测试主题');
+    expect(list.body.themes).toHaveLength(builtInThemes.length + 1);
+    expect(list.body.themes.find((theme: { id: string }) => theme.id === candidate.id)).toMatchObject({ name: '我的测试主题', codeStyle: 'dark' });
     await request(instance.app).delete(`/api/themes/${candidate.id}`).expect(200);
     expect(instance.service.themes).toHaveLength(0);
   });

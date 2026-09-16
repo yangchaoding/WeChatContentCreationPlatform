@@ -52,10 +52,65 @@ describe('WeChat-compatible rendering', () => {
     expect(result.document.querySelectorAll('sup')).toHaveLength(2);
     expect(result.text.match(/\[1\] https:\/\/example\.com/g)).toHaveLength(1);
   });
-  it('produces distinct structures for all eight built-in themes', () => {
-    const results = builtInThemes.map((candidate) => renderMarkdown('# 标题\n\n## 章节\n\n> 引用', candidate, defaultSettings(candidate)).html);
-    expect(new Set(results).size).toBe(8);
-    expect(results[4]).toContain('text-align: center');
-    expect(results[2]).toContain('border-bottom: 1px solid');
+  it('produces distinct structures for every built-in theme', () => {
+    const results = new Map(builtInThemes.map((candidate) => [candidate.id, renderMarkdown('# 标题\n\n## 章节\n\n> 引用', candidate, defaultSettings(candidate)).html]));
+    expect(new Set(results.values()).size).toBe(builtInThemes.length);
+    expect(results.get('lavender')).toContain('text-align: center');
+    expect(results.get('sunset')).toContain('border-bottom: 1px solid');
+  });
+});
+
+describe('Programming tutorial theme', () => {
+  const programming = builtInThemes.find((candidate) => candidate.id === 'programming')!;
+  const renderTutorial = (markdown: string, fontSize = programming.fontSize) => {
+    const result = renderMarkdown(markdown, programming, { ...defaultSettings(programming), fontSize });
+    return new DOMParser().parseFromString(result.html, 'text/html');
+  };
+  const luminance = (cssColor: string) => {
+    const channels = cssColor.match(/[\d.]+/g)!.slice(0, 3).map((value) => Number(value) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  };
+  const contrast = (foreground: string, background: string) => {
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  };
+
+  it('keeps every syntax color readable on the dark background and preserves the exact code', () => {
+    const code = '// 保留缩进和特殊字符\nfunction greet(name) {\n  const message = "<script>示例</script>";\n  return { message, count: 42, ready: true };\n}\n';
+    const document = renderTutorial('# 教程\n\n```js\n' + code + '```');
+    const pre = document.querySelector('pre')!;
+    const block = pre.querySelector('code')!;
+    const label = pre.previousElementSibling as HTMLElement;
+    expect(block.textContent).toBe(code);
+    expect(label.textContent).toBe('JavaScript');
+    expect(document.querySelector('script')).toBeNull();
+    expect(document.querySelector('[class]')).toBeNull();
+    const syntaxColors = [...block.querySelectorAll<HTMLElement>('span')].map((span) => span.style.color);
+    expect(new Set(syntaxColors).size).toBeGreaterThanOrEqual(4);
+    for (const color of [pre.style.color, block.style.color, ...syntaxColors]) expect(contrast(color, pre.style.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(label.style.color, label.style.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('labels Python, plain output and unlabelled code without altering their contents', () => {
+    const document = renderTutorial('# 教程\n\n```python\nprint("你好")\n```\n\n```text\n运行成功：1 条任务\n```\n\n    这是一行没有语言标记的代码\n');
+    const blocks = [...document.querySelectorAll('pre')];
+    expect(blocks.map((pre) => pre.previousElementSibling?.textContent)).toEqual(['Python', 'TEXT', 'CODE']);
+    expect(blocks.map((pre) => pre.querySelector('code')?.textContent?.trim())).toEqual(['print("你好")', '运行成功：1 条任务', '这是一行没有语言标记的代码']);
+  });
+
+  it('scales code with the article font, wraps long lines and separates inline code from blocks', () => {
+    const longLine = 'const documentationUrl = "https://example.com/' + 'a'.repeat(160) + '";\n';
+    const document = renderTutorial('# 教程\n\n使用 `completeTodo()` 完成任务。\n\n```javascript\n' + longLine + '```', 18);
+    const pre = document.querySelector('pre')!;
+    const block = pre.querySelector('code')!;
+    const inline = document.querySelector('p code') as HTMLElement;
+    expect(pre.style.fontSize).toBe('16px');
+    expect(block.style.fontSize).toBe('16px');
+    expect(pre.style.whiteSpace).toBe('pre-wrap');
+    expect(pre.style.overflowWrap).toBe('anywhere');
+    expect(block.textContent).toBe(longLine);
+    expect(block.style.backgroundColor).toBe('transparent');
+    expect(inline.style.backgroundColor).not.toBe('transparent');
+    expect(inline.style.fontFamily).toContain('monospace');
   });
 });

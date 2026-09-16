@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
-import { codePalettes, fontFamilies } from '../../shared/themes';
+import { getCodePalette, fontFamilies } from '../../shared/themes';
 import { articleTitle, parseDocument } from '../../shared/document';
 import type { ArticleSettings, CssRules, Theme } from '../../shared/types';
 
@@ -13,8 +13,9 @@ const languageNames: Record<string, string> = { js: 'JavaScript', javascript: 'J
 
 function themeRules(theme: Theme, settings: ArticleSettings): Record<string, CssRules> {
   const { fontSize, lineHeight, paragraphSpacing, accent } = settings;
-  const palette = codePalettes[theme.codeStyle === 'dark' ? 'dark' : 'light'];
-  const codeSize = theme.codeStyle === 'dark' ? px(Math.max(12, Math.min(16, fontSize - 2))) : '12px';
+  const palette = getCodePalette(theme.codeStyle);
+  const framedCode = theme.codeStyle === 'dark' || theme.codeStyle === 'warm';
+  const codeSize = framedCode ? px(Math.max(12, Math.min(16, fontSize - 2))) : '12px';
   const heading = { color: accent, 'font-family': fontFamilies[theme.headingFont], 'font-weight': '700', 'line-height': '1.55', 'margin-top': '32px', 'margin-bottom': '18px' };
   const h2: CssRules = { ...heading, 'font-size': px(fontSize + 4) };
   if (theme.headingStyle === 'bar') Object.assign(h2, { 'border-left': `3px solid ${accent}`, 'padding-left': '12px' });
@@ -43,7 +44,7 @@ function themeRules(theme: Theme, settings: ArticleSettings): Record<string, Css
     a: { color: accent, 'text-decoration': 'none', 'border-bottom': `1px solid ${accent}`, 'word-break': 'break-all' },
     hr: { border: 'none', 'border-top': `1px solid ${theme.soft}`, margin: '32px 0', height: '0' },
     img: { display: 'block', 'max-width': '100%', height: 'auto', margin: '22px auto', 'border-radius': '4px' },
-    pre: { margin: '22px 0', padding: '18px 16px', 'background-color': palette.background, 'border-radius': '5px', 'font-size': codeSize, 'line-height': '1.75', 'white-space': 'pre-wrap', 'word-break': 'break-word', color: palette.text, 'text-align': 'left', ...(theme.codeStyle === 'dark' ? { 'letter-spacing': '0', 'overflow-wrap': 'anywhere', 'tab-size': '2' } : {}) },
+    pre: { margin: '22px 0', padding: '18px 16px', 'background-color': palette.background, 'border-radius': '5px', 'font-size': codeSize, 'line-height': '1.75', 'white-space': 'pre-wrap', 'word-break': 'break-word', color: palette.text, 'text-align': 'left', ...(framedCode ? { 'letter-spacing': '0', 'overflow-wrap': 'anywhere', 'tab-size': '2' } : {}) },
     code: { 'font-family': fontFamilies.mono, 'font-size': '0.88em', 'background-color': theme.soft, color: accent, padding: '2px 5px', 'border-radius': '3px', 'word-break': 'break-word' },
     table: { 'border-collapse': 'collapse', width: '100%', margin: '22px 0', 'font-size': px(fontSize - 2), 'line-height': '1.7', 'table-layout': 'fixed' },
     th: { 'background-color': theme.soft, color: accent, padding: '10px 8px', border: '1px solid #e6e9e7', 'font-weight': '600', 'text-align': 'left', 'word-break': 'break-word' },
@@ -92,7 +93,7 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
   section.querySelectorAll<HTMLElement>('pre code').forEach((element) => {
     const code = element.textContent || '';
     const language = element.className.match(/language-([\w+-]+)/)?.[1]?.toLowerCase();
-    const palette = codePalettes[theme.codeStyle === 'dark' ? 'dark' : 'light'];
+    const palette = getCodePalette(theme.codeStyle);
     if (code.length < 40000) {
       try {
         const result = language && hljs.getLanguage(language) ? hljs.highlight(code, { language }) : hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'css', 'json', 'bash', 'xml']);
@@ -105,7 +106,7 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
       const color = /comment|quote/.test(className) ? palette.comment : /keyword|selector|tag/.test(className) ? palette.keyword : /string|attr/.test(className) ? palette.string : /number|literal/.test(className) ? palette.number : /title|function/.test(className) ? palette.title : palette.text;
       span.style.color = color;
     });
-    if (theme.codeStyle === 'dark') {
+    if (theme.codeStyle === 'dark' || theme.codeStyle === 'warm') {
       const pre = element.parentElement!;
       const frame = document.createElement('section');
       apply(frame, { margin: rules.pre.margin, 'border-radius': '7px', overflow: 'hidden', 'background-color': rules.pre['background-color'], 'text-align': 'left' });

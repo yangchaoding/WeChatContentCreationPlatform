@@ -14,7 +14,7 @@ export interface Theme {
   headingFont: 'sans' | 'serif';
   headingStyle: 'bar' | 'underline' | 'centered' | 'minimal' | 'pill';
   quoteStyle: 'line' | 'card' | 'plain';
-  codeStyle?: 'light' | 'dark';
+  codeStyle?: 'light' | 'dark' | 'warm';
   fontSize: number;
   lineHeight: number;
   paragraphSpacing: number;

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ArrowRight, Check, ChevronDown, Heart, Link2, Minus, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
-import { codePalettes, defaultSettings } from '../../shared/themes';
+import { codePalettes, defaultSettings, fontFamilies } from '../../shared/themes';
 import type { ArticleSettings, Theme } from '../../shared/types';
 
 export function ThemeThumbnail({ theme, large = false }: { theme: Theme; large?: boolean }) {
   const programming = theme.codeStyle === 'dark';
-  return <div className={`theme-thumbnail thumb-${theme.headingStyle} ${programming ? 'thumb-programming' : ''} ${large ? 'thumb-large' : ''}`} style={{ '--thumb-accent': theme.accent, '--thumb-soft': theme.soft, '--thumb-ink': theme.ink, '--thumb-code-background': codePalettes.dark.background, '--thumb-code-text': codePalettes.dark.text, '--thumb-code-keyword': codePalettes.dark.keyword, '--thumb-code-string': codePalettes.dark.string, fontFamily: theme.font === 'serif' ? '"Noto Serif SC", "SimSun", Georgia, serif' : 'inherit' } as CSSProperties} aria-hidden="true">
-    <span className="thumb-eyebrow">{programming ? 'DEVELOPER NOTES' : 'THE ART OF WORDS'}</span><strong className="thumb-title">{programming ? '把代码，讲清楚' : '让文字，自成风格'}</strong><span className="thumb-line" /><span className="thumb-line short" /><span className="thumb-heading">{programming ? '01 / 一步一步实现' : '留一点美好，给日常'}</span><span className="thumb-line" /><span className="thumb-line medium" />{programming ? <span className="thumb-code"><small>JavaScript</small><span><b>const</b> text = <i>'Hello'</i>;</span><span>console.log(text);</span></span> : <span className="thumb-quote"><i />把喜欢的生活，写进文字里。</span>}<span className="thumb-line" /><span className="thumb-line short" />
+  return <div className={`theme-thumbnail thumb-${theme.headingStyle} ${programming ? 'thumb-programming' : ''} ${large ? 'thumb-large' : ''}`} style={{ '--thumb-accent': theme.accent, '--thumb-soft': theme.soft, '--thumb-ink': theme.ink, '--thumb-background': theme.styles?.body?.['background-color'] || '#ffffff', '--thumb-code-background': codePalettes.dark.background, '--thumb-code-text': codePalettes.dark.text, '--thumb-code-keyword': codePalettes.dark.keyword, '--thumb-code-string': codePalettes.dark.string, fontFamily: theme.font === 'serif' ? '"Noto Serif SC", "SimSun", Georgia, serif' : 'inherit' } as CSSProperties} aria-hidden="true">
+    <span className="thumb-eyebrow">{programming ? 'DEVELOPER NOTES' : 'THE ART OF WORDS'}</span><strong className="thumb-title" style={{ fontFamily: fontFamilies[theme.headingFont] }}>{programming ? '把代码，讲清楚' : '让文字，自成风格'}</strong><span className="thumb-line" /><span className="thumb-line short" /><span className="thumb-heading" style={{ fontFamily: fontFamilies[theme.headingFont] }}>{programming ? '01 / 一步一步实现' : '留一点美好，给日常'}</span><span className="thumb-line" /><span className="thumb-line medium" />{programming ? <span className="thumb-code"><small>JavaScript</small><span><b>const</b> text = <i>'Hello'</i>;</span><span>console.log(text);</span></span> : <span className="thumb-quote"><i />把喜欢的生活，写进文字里。</span>}<span className="thumb-line" /><span className="thumb-line short" />
   </div>;
 }
 

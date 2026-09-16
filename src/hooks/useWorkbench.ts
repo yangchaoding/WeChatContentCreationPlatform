@@ -197,6 +197,7 @@ export function useWorkbench(notify: Notify) {
   const setContent = useCallback((value: string) => { contentRef.current = value; setContentState(value); if (!errorRef.current) setSaveStatus('pending'); }, []);
   const setSettings = useCallback((value: ArticleSettings | ((previous: ArticleSettings) => ArticleSettings)) => {
     const next = typeof value === 'function' ? value(settingsRef.current) : value;
+    if (JSON.stringify(next) === JSON.stringify(settingsRef.current)) return;
     settingsRef.current = next;
     setSettingsState(next);
     if (!errorRef.current) setSaveStatus('pending');

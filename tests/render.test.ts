@@ -60,10 +60,10 @@ describe('WeChat-compatible rendering', () => {
   });
 });
 
-describe('Programming tutorial theme', () => {
-  const programming = builtInThemes.find((candidate) => candidate.id === 'programming')!;
-  const renderTutorial = (markdown: string, fontSize = programming.fontSize) => {
-    const result = renderMarkdown(markdown, programming, { ...defaultSettings(programming), fontSize });
+describe.each(['programming', 'claude'] as const)('%s code theme', (themeId) => {
+  const selectedTheme = builtInThemes.find((candidate) => candidate.id === themeId)!;
+  const renderTutorial = (markdown: string, fontSize = selectedTheme.fontSize) => {
+    const result = renderMarkdown(markdown, selectedTheme, { ...defaultSettings(selectedTheme), fontSize });
     return new DOMParser().parseFromString(result.html, 'text/html');
   };
   const luminance = (cssColor: string) => {
@@ -75,7 +75,7 @@ describe('Programming tutorial theme', () => {
     return (values[0] + 0.05) / (values[1] + 0.05);
   };
 
-  it('keeps every syntax color readable on the dark background and preserves the exact code', () => {
+  it('keeps every syntax color readable on its background and preserves the exact code', () => {
     const code = '// 保留缩进和特殊字符\nfunction greet(name) {\n  const message = "<script>示例</script>";\n  return { message, count: 42, ready: true };\n}\n';
     const document = renderTutorial('# 教程\n\n```js\n' + code + '```');
     const pre = document.querySelector('pre')!;

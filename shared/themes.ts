@@ -3,6 +3,26 @@ import type { ArticleSettings, Theme } from './types';
 export const builtInThemes: Theme[] = [
   { id: 'forest', name: '山间来信', description: '自然清新，让阅读轻轻呼吸', category: '清新', accent: '#28775b', soft: '#f0f6f1', ink: '#35433c', muted: '#839188', font: 'sans', headingFont: 'serif', headingStyle: 'bar', quoteStyle: 'card', fontSize: 15, lineHeight: 1.9, paragraphSpacing: 20 },
   {
+    // Base colors match claude.com: gray-050, clay, gray-950 and gray-150.
+    id: 'claude', name: 'Claude', description: '参考 Claude 官网，暖白纸感与陶土色点缀', category: '暖调',
+    accent: '#d97757', soft: '#f0eee6', ink: '#141413', muted: '#73726c',
+    font: 'sans', headingFont: 'serif', headingStyle: 'underline', quoteStyle: 'card', codeStyle: 'warm',
+    fontSize: 16, lineHeight: 1.9, paragraphSpacing: 22,
+    styles: {
+      body: { 'background-color': '#faf9f5', 'letter-spacing': '0.2px' },
+      h1: { 'font-weight': '600', 'line-height': '1.5', 'letter-spacing': '0' },
+      h2: { color: '#141413', 'border-bottom': '1px solid #d97757', 'font-weight': '600', 'letter-spacing': '0', 'padding-bottom': '10px' },
+      h3: { color: '#3d3d3a', 'font-weight': '600', 'letter-spacing': '0' },
+      strong: { color: '#9d4b35', 'font-weight': '600' },
+      blockquote: { color: '#4d4c48', 'background-color': '#f0eee6', 'border-left': '3px solid #d97757', 'border-radius': '0 6px 6px 0', padding: '17px 19px' },
+      a: { color: '#9d4b35' },
+      code: { color: '#9d4b35', 'background-color': '#f0eee6', border: '1px solid #e8e6dc', 'letter-spacing': '0' },
+      th: { color: '#3d3d3a', 'background-color': '#e8e6dc', 'border-color': '#dedcd1', 'font-weight': '600' },
+      td: { 'border-color': '#dedcd1', 'vertical-align': 'top' },
+      hr: { 'border-top': '1px solid #dedcd1' },
+    },
+  },
+  {
     id: 'programming', name: '编程教程', description: '清晰步骤、深色代码，把技术讲明白', category: '编程',
     accent: '#3568d4', soft: '#eef4ff', ink: '#2b384d', muted: '#74839a',
     font: 'sans', headingFont: 'sans', headingStyle: 'bar', quoteStyle: 'card', codeStyle: 'dark',
@@ -42,4 +62,9 @@ export const fontFamilies = {
 export const codePalettes = {
   light: { background: '#f5f6f7', text: '#485364', comment: '#8e9a93', keyword: '#9d639e', string: '#448369', number: '#be784f', title: '#497fa1', header: '#eef1f4', label: '#607086', border: '#e0e5ec' },
   dark: { background: '#17263a', text: '#dde7f5', comment: '#9aafc4', keyword: '#c9adff', string: '#a1dfb5', number: '#f6c58d', title: '#8dcdf5', header: '#21334a', label: '#b5c6d9', border: '#30435a' },
+  warm: { background: '#f0eee6', text: '#3d3d3a', comment: '#5e5d59', keyword: '#9d4b35', string: '#4b6440', number: '#98522f', title: '#5b566f', header: '#e8e6dc', label: '#5e5d59', border: '#dedcd1' },
 } as const;
+
+export function getCodePalette(style?: Theme['codeStyle']) {
+  return codePalettes[style === 'dark' || style === 'warm' ? style : 'light'];
+}

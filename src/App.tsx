@@ -9,7 +9,7 @@ import { useWorkbench } from './hooks/useWorkbench';
 import { useSynchronizedScroll } from './hooks/useSynchronizedScroll';
 import { articleTitle, wordCount } from '../shared/document';
 import type { Theme } from '../shared/types';
-import { copyRichText, downloadFile, exportHtml, renderMarkdown } from './lib/render';
+import { copyPlainText, copyRichText, downloadFile, exportHtml, renderMarkdown } from './lib/render';
 import { errorMessage } from './lib/api';
 
 interface Toast { id: number; message: string; kind: 'success' | 'error' | 'info' }
@@ -33,6 +33,7 @@ export default function App() {
   const [themesOpen, setThemesOpen] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [copyingMarkdown, setCopyingMarkdown] = useState(false);
   const [copied, setCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Theme | null>(null);
@@ -83,6 +84,15 @@ export default function App() {
     } catch (error) { notify(errorMessage(error), 'error'); }
     finally { setCopying(false); }
   };
+  const copyMarkdown = async () => {
+    if (!article || workbench.switching || copyingMarkdown) return;
+    setCopyingMarkdown(true);
+    try {
+      await copyPlainText(content);
+      notify('Markdown 源文已复制');
+    } catch (error) { notify(errorMessage(error), 'error'); }
+    finally { setCopyingMarkdown(false); }
+  };
   const exportCurrent = () => {
     exportHtml(renderMarkdown(content, theme, settings, { filename: article?.name, articlePath: article?.path, directory: workspace?.directory }));
     setExportMenu(false);
@@ -103,7 +113,7 @@ export default function App() {
         <div className="view-toolbar"><div className="view-tabs" role="tablist" aria-label="编辑视图">{viewOptions.map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={14} />{label}</button>)}</div><div className="view-toolbar-end"><span className="current-theme"><span style={{ background: settings.accent }} />{theme.name}</span><button className="icon-button refresh-button" title="同步本地文件" aria-label="同步本地文件" onClick={() => void workbench.refresh(true)}><RefreshCw size={14} /></button><span className="toolbar-divider" /><span className="live-preview-label"><span /> 实时预览</span><button className="theme-toggle text-button" onClick={() => setThemesOpen((value) => !value)} title={themesOpen ? '收起排版主题' : '展开排版主题'} aria-label={themesOpen ? '收起排版主题' : '展开排版主题'} aria-expanded={themesOpen} aria-controls="theme-panel"><PanelRight size={14} /> 排版主题</button></div></div>
         {workbench.saveError && <div className="save-error-banner" role="alert"><span>{workbench.saveError}</span><div><button onClick={() => void workbench.retrySave()}>重试保存</button><button onClick={() => { downloadDraft(); void workbench.reloadArticle(); }}>下载草稿并重载</button></div></div>}
         {workbench.loading ? <div className="workbench-loading"><span className="loading-logo"><img src="/favicon.svg" alt="" /></span><h2>为你的文字，准备一个好地方</h2><p><LoaderCircle size={15} className="spin" /> 正在读取本地文章…</p></div> : workbench.loadError ? <div className="empty-workbench"><span className="empty-illustration"><FolderOpen size={36} strokeWidth={1.2} /></span><h2>还没有连上本地工作台</h2><p>{workbench.loadError}</p><button className="button button-primary" onClick={() => void workbench.initialize()}><RefreshCw size={15} />重新连接</button></div> : !article ? <div className="empty-workbench"><span className="empty-eyebrow">A LITTLE SPACE FOR BIG IDEAS</span><span className="empty-illustration"><SquarePen size={37} strokeWidth={1.1} /><Sparkles size={18} /></span><h2>每个好故事，都从这里开始。</h2><p>新建一篇文章，或把 Markdown 文件放进当前目录。<br />让灵感有处安放，让文字自成风格。</p><div><button className="button button-primary" onClick={() => showDialog('new')}><Plus size={16} /> 写第一篇文章</button><button className="button button-secondary" onClick={() => showDialog('directory')}><FolderOpen size={16} /> 连接已有目录</button></div></div> : <div className={`writing-area view-${view} ${workbench.switching ? 'is-switching' : ''}`}>
-          {view !== 'preview' && <Editor key={`${workspace?.directory}:${article.path}`} inputRef={editorRef} value={content} onChange={setContent} filename={article.name} disabled={workbench.switching} />}
+          {view !== 'preview' && <Editor key={`${workspace?.directory}:${article.path}`} inputRef={editorRef} value={content} onChange={setContent} filename={article.name} disabled={workbench.switching} onCopy={() => void copyMarkdown()} copying={copyingMarkdown} />}
           {view !== 'edit' && <section className="preview-panel"><div className="preview-toolbar"><span className="preview-caption"><Eye size={13} />文章预览</span><div className="device-switch" role="group" aria-label="预览设备"><button className={device === 'mobile' ? 'active' : ''} onClick={() => setDevice('mobile')} aria-pressed={device === 'mobile'} aria-label="手机预览"><Smartphone size={13} /><span>手机</span></button><button className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')} aria-pressed={device === 'desktop'} aria-label="桌面预览"><Monitor size={13} /><span>桌面</span></button></div><span className="preview-dimension">{previewWidth} <span>px</span></span></div><div className="preview-canvas" ref={previewRef}><div className={`article-paper device-${device}`} ref={paperRef} style={{ backgroundColor: theme.styles?.body?.['background-color'] || '#ffffff' }}><div className="paper-topline"><span /><span /><span /><i /></div><div className="rendered-article" role="region" aria-label="文章预览内容" dangerouslySetInnerHTML={{ __html: rendered.html }} /><div className="paper-end"><span /><i>✧</i><span /></div></div><div className="preview-end-note"><span /> 每一个好想法，都值得被好好呈现 <span /></div></div></section>}
         </div>}
         <footer className="statusbar"><div><span><AlignLeft size={12} /> {words.toLocaleString()} 字</span><i /><span>约 {Math.max(1, Math.ceil(words / 350))} 分钟阅读</span>{workspace?.truncated && <span className="status-warning">部分大文件或深层目录未载入</span>}</div><div>{rendered.localImages > 0 ? <span className="status-warning">{rendered.localImages} 张本地图片需在公众号上传</span> : <span className="wechat-ready"><ShieldCheck size={12} /> 为公众号阅读而设计</span>}<span className="status-version">MOPAI 1.0</span></div></footer>

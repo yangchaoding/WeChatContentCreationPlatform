@@ -70,6 +70,8 @@
 }
 
 /* Compact navigation and toolbars without shrinking the writing surface text. */
+.editor-copy-button{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;padding:4px 7px;border-radius:5px;font-size:10px;line-height:18px;color:var(--green);white-space:nowrap}
+.editor-copy-button:hover:not(:disabled){background:var(--green-soft)}
 .topbar,.brand{height:44px;min-height:44px}
 .topbar{padding:0 20px;gap:16px}
 .brand{padding:0 16px;gap:9px}

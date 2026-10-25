@@ -221,6 +221,28 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
   return { html: section.outerHTML, text: plain.textContent?.trim() || '', localImages, title };
 }
 
+export async function copyPlainText(content: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(content);
+      return;
+    } catch { /* Fall back to copying a plain-text selection. */ }
+  }
+  const holder = document.createElement('textarea');
+  holder.value = content;
+  holder.readOnly = true;
+  holder.style.cssText = 'position:fixed;left:-10000px;top:0;';
+  const activeElement = document.activeElement as HTMLElement | null;
+  document.body.append(holder);
+  let copied = false;
+  try {
+    holder.select();
+    copied = document.execCommand('copy');
+  } catch { /* Report the same actionable error when both methods fail. */ }
+  finally { holder.remove(); activeElement?.focus({ preventScroll: true }); }
+  if (!copied) throw new Error('未能复制 Markdown，请允许剪贴板权限后重试，或在编辑区全选复制。');
+}
+
 export async function copyRichText(rendered: RenderResult) {
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     try {

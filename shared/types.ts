@@ -56,6 +56,7 @@ export interface Article extends ArticleSummary {
 export interface Workspace {
   directory: string;
   name: string;
+  directories: string[];
   articles: ArticleSummary[];
   truncated: boolean;
 }

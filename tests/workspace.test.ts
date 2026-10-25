@@ -35,6 +35,7 @@ describe('Local workspace API', () => {
     const response = await request(instance.app).get('/api/workspace').expect(200);
     expect(response.body.articles.map((article: { path: string }) => article.path).sort()).toEqual(['article.md', 'notes/nested.md']);
     expect(response.body.articles.find((article: { path: string }) => article.path === 'notes/nested.md').title).toBe('嵌套文章');
+    expect(response.body.directories).toEqual(['notes']);
     expect(response.body.truncated).toBe(false);
   });
   it('reads, saves and detects stale revisions without overwriting external edits', async () => {
@@ -81,6 +82,43 @@ describe('Local workspace API', () => {
     expect(response.body.directories).toEqual([{ name: 'notes', path: path.join(articles, 'notes') }]);
     expect(response.body.parent).toBe(temporary);
     expect(response.body.bookmarks).toHaveLength(3);
+  });
+  it('navigates multiple Chinese directory levels and reads articles in sibling folders', async () => {
+    const course = path.join(articles, 'AI Agent开发');
+    const phases = ['阶段一：Python编程基础', '阶段二：计算机与开发工具基础'];
+    for (const phase of phases) {
+      await fs.mkdir(path.join(course, phase, '练习'), { recursive: true });
+      await fs.writeFile(path.join(course, phase, '练习', '同名.md'), `# ${phase}`);
+    }
+    const listing = await request(instance.app).get('/api/directories').query({ path: course }).expect(200);
+    expect(listing.body.directories.map((child: { name: string }) => child.name).sort()).toEqual([...phases].sort());
+    for (const phase of phases) {
+      const directory = path.join(course, phase);
+      const children = await request(instance.app).get('/api/directories').query({ path: directory }).expect(200);
+      expect(children.body.parent).toBe(course);
+      expect(children.body.directories).toEqual([{ name: '练习', path: path.join(directory, '练习') }]);
+      const relativePath = `AI Agent开发/${phase}/练习/同名.md`;
+      const article = await request(instance.app).get('/api/article').query({ path: relativePath }).expect(200);
+      expect(article.body.path).toBe(relativePath);
+      expect(article.body.content).toBe(`# ${phase}`);
+      const switched = await request(instance.app).post('/api/workspace').send({ directory }).expect(200);
+      expect(switched.body.articles.map((item: { path: string }) => item.path)).toEqual(['练习/同名.md']);
+      await request(instance.app).post('/api/workspace').send({ directory: articles }).expect(200);
+    }
+  });
+  it('includes empty directories and directories containing only Word documents', async () => {
+    const emptyPath = 'AI Agent开发/阶段四：机器学习/待整理';
+    const wordPath = 'AI Agent开发/阶段五：大语言模型';
+    await fs.mkdir(path.join(articles, emptyPath), { recursive: true });
+    await fs.mkdir(path.join(articles, wordPath), { recursive: true });
+    await fs.writeFile(path.join(articles, wordPath, '概念.md.docx'), 'Word document placeholder');
+    const response = await request(instance.app).get('/api/workspace').expect(200);
+    expect(response.body.directories).toEqual(expect.arrayContaining(['AI Agent开发', 'AI Agent开发/阶段四：机器学习', emptyPath, wordPath]));
+    expect(response.body.directories).not.toContain('.hidden');
+    expect(response.body.articles).toHaveLength(2);
+    const switched = await request(instance.app).post('/api/workspace').send({ directory: path.join(articles, 'AI Agent开发') }).expect(200);
+    expect(switched.body.articles).toEqual([]);
+    expect(switched.body.directories).toContain('阶段四：机器学习/待整理');
   });
   it.each(['dark', 'warm'] as const)('extracts, stores, reloads and removes a custom theme with %s code', async (codeStyle) => {
     const response = await request(instance.app).post('/api/themes/extract').send({ html: '<article style="font-size:16px;color:#444"><h2 style="color:#8a70a8">这是一篇文章</h2><p>正文里的小小片刻，都值得我们认真记住和表达。</p></article>' }).expect(200);

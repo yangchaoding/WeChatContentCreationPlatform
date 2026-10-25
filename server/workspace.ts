@@ -99,10 +99,12 @@ export class WorkspaceService {
   async list(): Promise<Workspace> {
     const root = this.directory;
     const articles: ArticleSummary[] = [];
+    const directories: string[] = [];
     let truncated = false;
-    let directories = 0;
+    let visitedDirectories = 0;
     const walk = async (directory: string, depth: number) => {
-      if (depth > 12 || directories++ > 3000 || articles.length >= 2000) { truncated = true; return; }
+      if (depth > 12 || visitedDirectories++ > 3000 || articles.length >= 2000) { truncated = true; return; }
+      if (directory !== root) directories.push(normalizePath(path.relative(root, directory)));
       const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
         if (directory === root) throw error;
         return [];
@@ -130,7 +132,7 @@ export class WorkspaceService {
       }
     };
     await walk(root, 0);
-    return { directory: root, name: path.basename(root) || root, articles, truncated };
+    return { directory: root, name: path.basename(root) || root, directories, articles, truncated };
   }
 
   async read(relativePath: string, root = this.directory): Promise<Article> {

@@ -75,8 +75,8 @@ export async function createLocalApp(options: { storageDirectory: string; initia
     if (!options.watch) return;
     const watchedRoot = service.directory;
     watcher = chokidar.watch(watchedRoot, { ignoreInitial: true, depth: 12, ignored: (filePath) => path.relative(watchedRoot, filePath).split(/[/\\]/).some((segment) => segment.startsWith('.') || ['node_modules', 'dist', 'build'].includes(segment)), awaitWriteFinish: { stabilityThreshold: 350, pollInterval: 100 } });
-    watcher.on('all', (_event, filePath) => {
-      if (!/\.md$/i.test(filePath)) return;
+    watcher.on('all', (event, filePath) => {
+      if (event !== 'addDir' && event !== 'unlinkDir' && !/\.md$/i.test(filePath)) return;
       clearTimeout(timer);
       timer = setTimeout(() => broadcast('files-changed'), 250);
     });

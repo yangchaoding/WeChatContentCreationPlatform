@@ -39,6 +39,15 @@
 .thumb-large .thumb-code>small{font-size:5px}
 .theme-thumbnail{background:linear-gradient(145deg,var(--thumb-background,#fff) 40%,var(--thumb-soft))}
 
+/* Nested article folders use their own names and retain room for long paths. */
+.article-tree{list-style:none;margin:0;padding:0}
+.article-tree>li{min-width:0}
+.folder-empty{padding:5px 9px 10px;font-size:10px;color:#899881}
+.folder-heading{min-height:32px;margin:3px 0;padding-top:7px;padding-bottom:7px;border-radius:5px}
+.folder-heading:hover{background:#eef3eb;color:#537058}
+.folder-heading>svg,.folder-heading>small,.article-item>svg{flex-shrink:0}
+.folder-heading>span{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
+
 /* Collapsible side panels leave the available width to the writing desk. */
 .sidebar-toggle{display:inline-flex}
 .sidebar-collapse{display:flex;margin-left:auto}

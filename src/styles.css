@@ -73,6 +73,10 @@
 .view-toolbar{height:40px;padding:0 20px 6px}
 .preview-toolbar,.view-split .preview-toolbar,.editor-panel-top,.view-split .editor-panel-top{height:34px;min-height:34px}
 .editor-formatting,.view-split .editor-formatting{height:32px;min-height:32px}
+@media(min-width:581px){
+  .view-split .editor-panel{flex:3}
+  .view-split .preview-panel{flex:2}
+}
 @media(max-width:580px){
   .topbar{height:40px;min-height:40px;padding:0 14px}
   .document-header{min-height:56px;padding:6px 14px;gap:8px}

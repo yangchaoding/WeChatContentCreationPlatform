@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
+import type { RefObject } from 'react';
 import { Bold, Code2, Heading2, Italic, Link2, List, Quote } from 'lucide-react';
 
-export default function Editor({ value, onChange, filename, disabled }: { value: string; onChange: (value: string) => void; filename: string; disabled?: boolean }) {
-  const input = useRef<HTMLTextAreaElement>(null);
+export default function Editor({ value, onChange, filename, disabled, inputRef: input }: { value: string; onChange: (value: string) => void; filename: string; disabled?: boolean; inputRef: RefObject<HTMLTextAreaElement | null> }) {
   const numbers = useRef<HTMLPreElement>(null);
   const lineNumbers = useMemo(() => Array.from({ length: value.split('\n').length }, (_, index) => String(index + 1)).join('\n'), [value]);
   const insert = (before: string, after = '', placeholder = '文字') => {

@@ -26,6 +26,11 @@ export interface Theme {
   extraction?: { sampledElements: number; detectedRoles: string[]; notes: string[] };
 }
 
+export interface ThemeLibrary {
+  themes: Theme[];
+  defaultThemeId: string;
+}
+
 export interface ArticleSettings {
   themeId: string;
   fontSize: number;

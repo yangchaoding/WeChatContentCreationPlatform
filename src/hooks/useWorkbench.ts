@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { builtInThemes, defaultSettings } from '../../shared/themes';
-import type { Article, ArticleSettings, Theme, Workspace } from '../../shared/types';
+import { builtInThemes, defaultSettings, systemDefaultTheme } from '../../shared/themes';
+import type { Article, ArticleSettings, Theme, ThemeLibrary, Workspace } from '../../shared/types';
 import { api, ApiError, errorMessage, query } from '../lib/api';
 
 export type Notify = (message: string, kind?: 'success' | 'error' | 'info') => void;
@@ -12,6 +12,8 @@ export function useWorkbench(notify: Notify) {
   const [content, setContentState] = useState('');
   const [settings, setSettingsState] = useState<ArticleSettings>(defaultSettings());
   const [themes, setThemes] = useState<Theme[]>(builtInThemes);
+  const [defaultThemeId, setDefaultThemeId] = useState(systemDefaultTheme.id);
+  const [savingDefaultThemeId, setSavingDefaultThemeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -23,6 +25,10 @@ export function useWorkbench(notify: Notify) {
   const contentRef = useRef(content);
   const settingsRef = useRef(settings);
   const themesRef = useRef(themes);
+  const themeLibraryVersion = useRef(0);
+  const defaultThemeRef = useRef(defaultThemeId);
+  const inheritsThemeRef = useRef(true);
+  const savingDefaultThemeRef = useRef(false);
   const savedSettingsRef = useRef('');
   const savePromise = useRef<Promise<boolean> | null>(null);
   const settingsPromise = useRef<Promise<boolean> | null>(null);
@@ -32,12 +38,32 @@ export function useWorkbench(notify: Notify) {
   const errorRef = useRef('');
 
   const updateWorkspace = useCallback((value: Workspace) => { workspaceRef.current = value; setWorkspace(value); }, []);
-  const updateThemes = useCallback((value: Theme[]) => { themesRef.current = value; setThemes(value); }, []);
+  const updateThemes = useCallback((value: Theme[]) => { themeLibraryVersion.current++; themesRef.current = value; setThemes(value); }, []);
+  const updateThemeLibrary = useCallback((library: ThemeLibrary) => {
+    const fallback = library.themes.find((theme) => theme.id === library.defaultThemeId) || systemDefaultTheme;
+    updateThemes(library.themes);
+    defaultThemeRef.current = fallback.id;
+    setDefaultThemeId(fallback.id);
+    if (inheritsThemeRef.current || !library.themes.some((theme) => theme.id === settingsRef.current.themeId)) {
+      inheritsThemeRef.current = true;
+      const next = defaultSettings(fallback);
+      const signature = JSON.stringify(next);
+      if (signature !== JSON.stringify(settingsRef.current)) {
+        settingsRef.current = next;
+        // Inherited defaults are not an individual article's saved preference.
+        savedSettingsRef.current = signature;
+        setSettingsState(next);
+        if (!errorRef.current && !savePromise.current) setSaveStatus(articleRef.current && contentRef.current !== articleRef.current.content ? 'pending' : 'saved');
+      }
+    }
+  }, [updateThemes]);
   const applyArticle = useCallback((value: Article | null, root?: string) => {
     articleRef.current = value;
     contentRef.current = value?.content || '';
     const selectedTheme = themesRef.current.find((theme) => theme.id === value?.settings?.themeId);
-    const nextSettings = value?.settings && selectedTheme ? { ...defaultSettings(selectedTheme), ...value.settings } : defaultSettings();
+    const fallback = themesRef.current.find((theme) => theme.id === defaultThemeRef.current) || systemDefaultTheme;
+    inheritsThemeRef.current = !(value?.settings && selectedTheme);
+    const nextSettings = value?.settings && selectedTheme ? { ...defaultSettings(selectedTheme), ...value.settings } : defaultSettings(fallback);
     settingsRef.current = nextSettings;
     savedSettingsRef.current = JSON.stringify(nextSettings);
     setArticle(value);
@@ -128,23 +154,25 @@ export function useWorkbench(notify: Notify) {
     setLoading(true);
     setLoadError('');
     try {
-      const [root, themeList] = await Promise.all([api<Workspace>('/workspace'), api<{ themes: Theme[] }>('/themes')]);
-      updateThemes(themeList.themes);
+      const [root, themeList] = await Promise.all([api<Workspace>('/workspace'), api<ThemeLibrary>('/themes')]);
+      updateThemeLibrary(themeList);
       updateWorkspace(root);
       await chooseInitial(root);
       initialized.current = true;
       setConnected(true);
     } catch (error) { setLoadError(errorMessage(error)); setConnected(false); }
     finally { setLoading(false); }
-  }, [chooseInitial, updateThemes, updateWorkspace]);
+  }, [chooseInitial, updateThemeLibrary, updateWorkspace]);
 
   useEffect(() => { void initialize(); }, [initialize]);
 
   const refresh = useCallback(async (reportError = false) => {
     if (switchingRef.current || !initialized.current) return;
     try {
-      const root = await api<Workspace>('/workspace');
+      const libraryVersion = themeLibraryVersion.current;
+      const [root, themeList] = await Promise.all([api<Workspace>('/workspace'), api<ThemeLibrary>('/themes')]);
       if (switchingRef.current) return;
+      if (libraryVersion === themeLibraryVersion.current) updateThemeLibrary(themeList);
       setConnected(true);
       const oldRoot = workspaceRef.current;
       const current = articleRef.current;
@@ -176,12 +204,12 @@ export function useWorkbench(notify: Notify) {
             const styleDraft = settingsRef.current;
             const hasStyleDraft = savedSettingsRef.current !== JSON.stringify(styleDraft);
             applyArticle(updated, root.directory);
-            if (hasStyleDraft) { settingsRef.current = styleDraft; setSettingsState(styleDraft); }
+            if (hasStyleDraft) { inheritsThemeRef.current = false; settingsRef.current = styleDraft; setSettingsState(styleDraft); }
           }
         }
       }
     } catch (error) { setConnected(false); if (reportError) notify(errorMessage(error), 'error'); }
-  }, [applyArticle, chooseInitial, markError, notify, updateWorkspace]);
+  }, [applyArticle, chooseInitial, markError, notify, updateThemeLibrary, updateWorkspace]);
 
   useEffect(() => {
     const events = new EventSource('/api/events');
@@ -198,6 +226,7 @@ export function useWorkbench(notify: Notify) {
   const setSettings = useCallback((value: ArticleSettings | ((previous: ArticleSettings) => ArticleSettings)) => {
     const next = typeof value === 'function' ? value(settingsRef.current) : value;
     if (JSON.stringify(next) === JSON.stringify(settingsRef.current)) return;
+    inheritsThemeRef.current = false;
     settingsRef.current = next;
     setSettingsState(next);
     if (!errorRef.current) setSaveStatus('pending');
@@ -277,6 +306,18 @@ export function useWorkbench(notify: Notify) {
     setSettings({ ...defaultSettings(theme), showTitle: settingsRef.current.showTitle, showMeta: settingsRef.current.showMeta, linkFootnotes: settingsRef.current.linkFootnotes });
   }, [setSettings]);
 
+  const setDefaultTheme = useCallback(async (theme: Theme) => {
+    if (savingDefaultThemeRef.current || theme.id === defaultThemeRef.current) return;
+    savingDefaultThemeRef.current = true;
+    setSavingDefaultThemeId(theme.id);
+    try {
+      const library = await api<ThemeLibrary>('/themes/default', { method: 'PUT', body: { themeId: theme.id } });
+      updateThemeLibrary(library);
+      notify(`已将「${theme.name}」设为默认主题`);
+    } catch (error) { notify(errorMessage(error), 'error'); }
+    finally { savingDefaultThemeRef.current = false; setSavingDefaultThemeId(null); }
+  }, [notify, updateThemeLibrary]);
+
   const addTheme = useCallback(async (theme: Theme) => {
     const result = await api<{ theme: Theme }>('/themes', { method: 'POST', body: { theme } });
     updateThemes([...themesRef.current.filter((item) => item.id !== result.theme.id), result.theme]);
@@ -286,12 +327,11 @@ export function useWorkbench(notify: Notify) {
 
   const deleteTheme = useCallback(async (theme: Theme) => {
     try {
-      await api(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
-      updateThemes(themesRef.current.filter((item) => item.id !== theme.id));
-      if (settingsRef.current.themeId === theme.id) selectTheme(builtInThemes[0]);
+      const library = await api<ThemeLibrary>(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
+      updateThemeLibrary(library);
       notify('已移除自定义主题');
     } catch (error) { notify(errorMessage(error), 'error'); }
-  }, [notify, selectTheme, updateThemes]);
+  }, [notify, updateThemeLibrary]);
 
   const retrySave = useCallback(async () => { errorRef.current = ''; setSaveError(''); if (await flush()) notify('文章与排版设置已保存'); }, [flush, notify]);
   const reloadArticle = useCallback(async () => {
@@ -305,5 +345,5 @@ export function useWorkbench(notify: Notify) {
     } catch (error) { notify(errorMessage(error), 'error'); }
   }, [applyArticle, chooseInitial, notify, updateWorkspace]);
 
-  return { workspace, article, content, setContent, settings, setSettings, themes, theme: themes.find((item) => item.id === settings.themeId) || builtInThemes[0], loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
+  return { workspace, article, content, setContent, settings, setSettings, themes, defaultThemeId, savingDefaultThemeId, setDefaultTheme, theme: themes.find((item) => item.id === settings.themeId) || themes.find((item) => item.id === defaultThemeId) || systemDefaultTheme, loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
 }

@@ -49,7 +49,9 @@ export const builtInThemes: Theme[] = [
   { id: 'bamboo', name: '青竹留白', description: '东方雅意，不疾不徐地叙述', category: '雅致', accent: '#5a807b', soft: '#eef5f3', ink: '#354b47', muted: '#8b9e99', font: 'serif', headingFont: 'serif', headingStyle: 'centered', quoteStyle: 'plain', fontSize: 16, lineHeight: 2, paragraphSpacing: 24 },
 ];
 
-export function defaultSettings(theme: Theme = builtInThemes[0]): ArticleSettings {
+export const systemDefaultTheme = builtInThemes.find((theme) => theme.id === 'forest')!;
+
+export function defaultSettings(theme: Theme = systemDefaultTheme): ArticleSettings {
   return { themeId: theme.id, fontSize: theme.fontSize, lineHeight: theme.lineHeight, paragraphSpacing: theme.paragraphSpacing, accent: theme.accent, font: theme.font, justify: false, showTitle: true, showMeta: true, linkFootnotes: false };
 }
 

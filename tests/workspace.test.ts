@@ -4,7 +4,7 @@ import os from 'node:os';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLocalApp } from '../server/app';
-import { builtInThemes, defaultSettings } from '../shared/themes';
+import { builtInThemes, defaultSettings, systemDefaultTheme } from '../shared/themes';
 
 let temporary: string;
 let articles: string;
@@ -67,6 +67,46 @@ describe('Local workspace API', () => {
     instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
     expect((await instance.service.read('article.md')).settings).toEqual(settings);
     expect((await instance.service.read('notes/nested.md')).settings).toBeUndefined();
+  });
+  it('persists the chosen default across restarts and workspace changes without rewriting article settings', async () => {
+    const settings = { ...defaultSettings(builtInThemes.find((theme) => theme.id === 'sunset')), fontSize: 18 };
+    await instance.service.saveSettings('article.md', settings);
+    const response = await request(instance.app).put('/api/themes/default').send({ themeId: 'claude' }).expect(200);
+    expect(response.body.defaultThemeId).toBe('claude');
+    expect((await instance.service.read('article.md')).settings).toEqual(settings);
+    expect((await instance.service.read('notes/nested.md')).settings).toBeUndefined();
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    expect((await request(instance.app).get('/api/themes')).body.defaultThemeId).toBe('claude');
+    await request(instance.app).post('/api/workspace').send({ directory: path.join(articles, 'notes') }).expect(200);
+    expect((await request(instance.app).get('/api/themes')).body.defaultThemeId).toBe('claude');
+  });
+  it('supports a custom default and restores the system default when that theme is deleted', async () => {
+    const theme = { ...builtInThemes[1], id: 'custom-11111111-1111-4111-8111-111111111111', name: '默认自定义主题' };
+    await request(instance.app).post('/api/themes').send({ theme }).expect(201);
+    await request(instance.app).put('/api/themes/default').send({ themeId: theme.id }).expect(200);
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    expect(instance.service.themeLibrary.defaultThemeId).toBe(theme.id);
+    const deleted = await request(instance.app).delete(`/api/themes/${theme.id}`).expect(200);
+    expect(deleted.body.defaultThemeId).toBe(systemDefaultTheme.id);
+    expect(deleted.body.themes.some((item: { id: string }) => item.id === theme.id)).toBe(false);
+    const saved = JSON.parse(await fs.readFile(path.join(temporary, 'state', 'state.json'), 'utf8'));
+    expect(saved.defaultThemeId).toBe(systemDefaultTheme.id);
+  });
+  it('rejects invalid default themes without losing the saved choice', async () => {
+    await request(instance.app).put('/api/themes/default').send({ themeId: 'programming' }).expect(200);
+    await request(instance.app).put('/api/themes/default').send({ themeId: 'missing' }).expect(404);
+    await request(instance.app).put('/api/themes/default').send({ themeId: 123 }).expect(400);
+    expect(instance.service.themeLibrary.defaultThemeId).toBe('programming');
+    await request(instance.app).put('/api/themes/default').send({ themeId: 'claude' }).expect(200);
+    expect(instance.service.themeLibrary.defaultThemeId).toBe('claude');
+  });
+  it.each([undefined, 'removed-theme'])('loads older or stale default-theme preferences (%s)', async (defaultThemeId) => {
+    await instance.close();
+    await fs.writeFile(path.join(temporary, 'state', 'state.json'), JSON.stringify({ directory: articles, themes: [], settings: {}, defaultThemeId }));
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    expect(instance.service.themeLibrary.defaultThemeId).toBe(systemDefaultTheme.id);
   });
   it('changes directories and rejects an in-flight request from the previous workspace', async () => {
     const second = path.join(temporary, 'second');

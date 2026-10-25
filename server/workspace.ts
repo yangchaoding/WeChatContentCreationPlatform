@@ -4,13 +4,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { articleTitle } from '../shared/document';
-import type { Article, ArticleSettings, ArticleSummary, DirectoryListing, Theme, Workspace } from '../shared/types';
+import { builtInThemes, systemDefaultTheme } from '../shared/themes';
+import type { Article, ArticleSettings, ArticleSummary, DirectoryListing, Theme, ThemeLibrary, Workspace } from '../shared/types';
 
 export class AppError extends Error {
   constructor(public status: number, message: string, public code = 'ERROR') { super(message); }
 }
 
-interface State { directory: string; settings: Record<string, ArticleSettings>; themes: Theme[] }
+interface State { directory: string; settings: Record<string, ArticleSettings>; themes: Theme[]; defaultThemeId: string }
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 const excluded = new Set(['node_modules', 'dist', 'build', 'vendor', '$RECYCLE.BIN', 'System Volume Information']);
 const inside = (root: string, target: string) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)); };
@@ -30,13 +31,13 @@ export class WorkspaceService {
   async init() {
     await fs.mkdir(this.storageDirectory, { recursive: true });
     await fs.mkdir(this.initialDirectory, { recursive: true });
-    this.state = { directory: await fs.realpath(this.initialDirectory), settings: {}, themes: [] };
+    this.state = { directory: await fs.realpath(this.initialDirectory), settings: {}, themes: [], defaultThemeId: systemDefaultTheme.id };
     try {
       const saved = JSON.parse(await fs.readFile(path.join(this.storageDirectory, 'state.json'), 'utf8')) as State;
       if (saved && typeof saved.directory === 'string') {
         try { saved.directory = await this.checkDirectory(saved.directory); }
         catch { saved.directory = this.state.directory; }
-        this.state = { directory: saved.directory, settings: saved.settings || {}, themes: Array.isArray(saved.themes) ? saved.themes : [] };
+        this.state = { directory: saved.directory, settings: saved.settings || {}, themes: Array.isArray(saved.themes) ? saved.themes : [], defaultThemeId: typeof saved.defaultThemeId === 'string' ? saved.defaultThemeId : systemDefaultTheme.id };
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new AppError(500, '本地设置文件无法读取。请检查 .mopai/state.json 后重新启动。');
@@ -45,6 +46,11 @@ export class WorkspaceService {
 
   get directory() { return this.state.directory; }
   get themes() { return this.state.themes; }
+  get themeLibrary(): ThemeLibrary {
+    const themes = [...builtInThemes, ...this.state.themes];
+    const defaultThemeId = themes.some((theme) => theme.id === this.state.defaultThemeId) ? this.state.defaultThemeId : systemDefaultTheme.id;
+    return { themes, defaultThemeId };
+  }
 
   private persist(change: () => void) {
     const next = this.stateQueue.then(async () => {
@@ -192,9 +198,19 @@ export class WorkspaceService {
     return theme;
   }
 
+  async setDefaultTheme(id: string) {
+    await this.persist(() => {
+      if (!this.themeLibrary.themes.some((theme) => theme.id === id)) throw new AppError(404, '未找到这个主题，请刷新后重试。');
+      this.state.defaultThemeId = id;
+    });
+  }
+
   async deleteTheme(id: string) {
-    if (!this.state.themes.some((theme) => theme.id === id)) throw new AppError(404, '未找到这个自定义主题。');
-    await this.persist(() => { this.state.themes = this.state.themes.filter((theme) => theme.id !== id); });
+    await this.persist(() => {
+      if (!this.state.themes.some((theme) => theme.id === id)) throw new AppError(404, '未找到这个自定义主题。');
+      this.state.themes = this.state.themes.filter((theme) => theme.id !== id);
+      if (this.state.defaultThemeId === id) this.state.defaultThemeId = systemDefaultTheme.id;
+    });
   }
 
   async directories(directory?: string): Promise<DirectoryListing> {

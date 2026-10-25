@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ArrowRight, Check, ChevronDown, Heart, Link2, Minus, PanelRightClose, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, Heart, Link2, LoaderCircle, Minus, PanelRightClose, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react';
 import { codePalettes, defaultSettings, fontFamilies } from '../../shared/themes';
 import type { ArticleSettings, Theme } from '../../shared/types';
 
@@ -15,7 +15,7 @@ function Switch({ checked, onChange, label, description }: { checked: boolean; o
   return <div className="switch-row"><span><strong>{label}</strong>{description && <small>{description}</small>}</span><button className={`switch ${checked ? 'on' : ''}`} role="switch" aria-checked={checked} aria-label={label} onClick={onChange}><span /></button></div>;
 }
 
-export default function ThemePanel({ themes, selected, settings, onSelect, onSettings, onExtract, onDelete, open, onClose }: { themes: Theme[]; selected: Theme; settings: ArticleSettings; onSelect: (theme: Theme) => void; onSettings: (settings: ArticleSettings) => void; onExtract: () => void; onDelete: (theme: Theme) => void; open: boolean; onClose: () => void }) {
+export default function ThemePanel({ themes, selected, settings, onSelect, onSettings, onExtract, onDelete, defaultThemeId, onSetDefault, savingDefaultThemeId, open, onClose }: { themes: Theme[]; selected: Theme; settings: ArticleSettings; onSelect: (theme: Theme) => void; onSettings: (settings: ArticleSettings) => void; onExtract: () => void; onDelete: (theme: Theme) => void; defaultThemeId: string; onSetDefault: (theme: Theme) => void; savingDefaultThemeId: string | null; open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<'themes' | 'settings'>('themes');
   const [filter, setFilter] = useState<'all' | 'custom' | 'favorite'>('all');
   const [favorites, setFavorites] = useState<string[]>(() => { try { const value = JSON.parse(localStorage.getItem('mopai:favorites') || '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; } });
@@ -29,10 +29,14 @@ export default function ThemePanel({ themes, selected, settings, onSelect, onSet
       <div className="theme-panel-scroll">
         {tab === 'themes' ? <>
           <div className="theme-intro"><h2>好文字，配好排版<span className="theme-intro-spark">✧</span></h2><p>选一种风格，让内容被认真阅读。</p></div>
+          <p className="default-theme-hint">默认主题用于新文章和未单独设置排版的文章。</p>
           <div className="theme-filters"><div className="filter-segments"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部 <span>{themes.length}</span></button><button className={filter === 'custom' ? 'active' : ''} onClick={() => setFilter('custom')}>我的主题</button></div><button className={`icon-button favorite-filter ${filter === 'favorite' ? 'is-favorite' : ''}`} title="我的收藏" aria-label="我的收藏" aria-pressed={filter === 'favorite'} onClick={() => setFilter(filter === 'favorite' ? 'all' : 'favorite')}><Heart size={15} fill={filter === 'favorite' ? 'currentColor' : 'none'} /></button></div>
           <div className="theme-grid">
             {filtered.map((theme) => <div className={`theme-card ${selected.id === theme.id ? 'is-selected' : ''}`} key={theme.id}>
               <button className="theme-card-select" onClick={() => onSelect(theme)} aria-pressed={selected.id === theme.id} aria-label={`应用${theme.name}主题`} title={theme.description}><ThemeThumbnail theme={theme} /><span className="theme-card-caption"><strong>{theme.name}</strong><small>{theme.category}</small></span>{selected.id === theme.id && <span className="theme-selected-mark"><Check size={11} strokeWidth={3} /></span>}</button>
+              <button className={`theme-default-button ${defaultThemeId === theme.id ? 'is-default' : ''}`} disabled={Boolean(savingDefaultThemeId) || defaultThemeId === theme.id} onClick={() => onSetDefault(theme)} aria-label={defaultThemeId === theme.id ? `${theme.name}是默认主题` : `将${theme.name}设为默认主题`}>
+                {savingDefaultThemeId === theme.id ? <><LoaderCircle size={11} className="spin" /> 保存中…</> : defaultThemeId === theme.id ? <><Check size={11} /> 默认主题</> : '设为默认'}
+              </button>
               <button className={`theme-favorite ${favorites.includes(theme.id) ? 'is-favorite' : ''}`} title={favorites.includes(theme.id) ? '取消收藏' : '收藏主题'} aria-label={`${favorites.includes(theme.id) ? '取消收藏' : '收藏'}${theme.name}`} onClick={() => toggleFavorite(theme.id)}><Heart size={12} fill={favorites.includes(theme.id) ? 'currentColor' : 'none'} /></button>
               {theme.custom && <button className="theme-delete" title="移除自定义主题" aria-label={`移除${theme.name}主题`} onClick={() => onDelete(theme)}><Trash2 size={12} /></button>}
             </div>)}

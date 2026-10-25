@@ -138,16 +138,25 @@ export async function createLocalApp(options: { storageDirectory: string; initia
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     res.sendFile(target);
   }));
-  app.get('/api/themes', (_req, res) => res.json({ themes: [...builtInThemes, ...service.themes] }));
+  app.get('/api/themes', (_req, res) => res.json(service.themeLibrary));
+  app.put('/api/themes/default', asyncRoute(async (req, res) => {
+    await service.setDefaultTheme(textField(req.body?.themeId, '主题 ID', 100));
+    res.json(service.themeLibrary);
+    broadcast('themes-changed');
+  }));
   app.post('/api/themes/extract', asyncRoute(async (req, res) => {
     if (typeof req.body?.html === 'string') return res.json({ theme: extractTheme(req.body.html) });
     const article = await fetchWeChatArticle(textField(req.body?.url, '公众号链接', 4096));
     res.json({ theme: extractTheme(article.html, article.url) });
   }));
-  app.post('/api/themes', asyncRoute(async (req, res) => res.status(201).json({ theme: await service.addTheme(validateTheme(req.body?.theme)) })));
+  app.post('/api/themes', asyncRoute(async (req, res) => {
+    res.status(201).json({ theme: await service.addTheme(validateTheme(req.body?.theme)) });
+    broadcast('themes-changed');
+  }));
   app.delete('/api/themes/:id', asyncRoute(async (req, res) => {
     await service.deleteTheme(textField(req.params.id, '主题 ID', 100));
-    res.json({ ok: true });
+    res.json({ ok: true, ...service.themeLibrary });
+    broadcast('themes-changed');
   }));
   app.use('/api', (_req, res) => res.status(404).json({ message: '未找到这个接口。' }));
   if (options.distDirectory) {

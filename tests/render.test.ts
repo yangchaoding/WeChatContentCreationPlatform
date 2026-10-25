@@ -60,6 +60,62 @@ describe('WeChat-compatible rendering', () => {
   });
 });
 
+describe('text diagrams', () => {
+  const diagram = [
+    '┌────────┐        ┌────────┐        ┌────────┐        ┌────────┐',
+    '│ "小明"  │        │   18   │        │  1.75  │        │  True  │   ← 数据（对象）',
+    '└────────┘        └────────┘        └────────┘        └────────┘',
+    '    ▲                  ▲                 ▲                 ▲',
+    '    │                  │                 │                 │',
+    '  name                age            height          is_student   ← 变量名（标签）',
+    '',
+  ].join('\n');
+
+  it.each(builtInThemes)('preserves the supplied diagram in $name with horizontal scrolling', (selectedTheme) => {
+    const result = renderMarkdown('```\n' + diagram + '```', selectedTheme, defaultSettings(selectedTheme));
+    const document = new DOMParser().parseFromString(result.html, 'text/html');
+    const pre = document.querySelector('pre')!;
+    const code = pre.querySelector('code')!;
+    expect(code.textContent).toBe(diagram);
+    expect(result.text).toContain(diagram.trimEnd());
+    expect(pre.style.overflowX).toBe('auto');
+    expect(pre.style.maxWidth).toBe('100%');
+    for (const element of [pre, code]) {
+      expect(element.style.whiteSpace).toBe('pre');
+      expect(element.style.wordBreak).toBe('normal');
+      expect(element.style.overflowWrap).toBe('normal');
+      expect(element.style.letterSpacing).toBe('0');
+      expect(element.style.fontFamily).toContain('monospace');
+    }
+    const cells = [...code.querySelectorAll<HTMLElement>('span')];
+    expect(cells.map((cell) => cell.textContent).join('')).toBe('小明数据（对象）变量名（标签）');
+    for (const cell of cells) {
+      expect(cell.style.display).toBe('inline-block');
+      expect(cell.style.width).toBe('2ch');
+      expect(cell.style.color).toBe('');
+    }
+    expect(document.querySelector('[class], style')).toBeNull();
+  });
+
+  it.each(['text', 'plaintext', 'txt', 'ascii'])('preserves %s diagrams, tabs and HTML-like text', (language) => {
+    const source = '根目录\n\t├── <script>alert("示例")</script>\n\t└── 文件.txt\n';
+    const { document } = render('```' + language + '\n' + source + '```');
+    expect(document.querySelector('pre code')?.textContent).toBe(source);
+    expect(document.querySelector('pre')?.style.whiteSpace).toBe('pre');
+    expect(document.querySelector('pre')?.style.tabSize).toBe('4');
+    expect(document.querySelector('script')).toBeNull();
+  });
+
+  it('keeps explicit programming languages and ordinary unlabelled code highlighted and wrapped', () => {
+    const { document } = render('```js\nconst border = "┌──┐";\n```\n\n```\nconst count = 123;\n```');
+    for (const pre of document.querySelectorAll('pre')) {
+      expect(pre.style.whiteSpace).toBe('pre-wrap');
+      expect(pre.querySelector('span[style]')).not.toBeNull();
+      expect(pre.querySelector('span[style*="inline-block"]')).toBeNull();
+    }
+  });
+});
+
 describe.each(['programming', 'claude'] as const)('%s code theme', (themeId) => {
   const selectedTheme = builtInThemes.find((candidate) => candidate.id === themeId)!;
   const renderTutorial = (markdown: string, fontSize = selectedTheme.fontSize) => {

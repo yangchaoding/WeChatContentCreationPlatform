@@ -11,6 +11,28 @@ const apply = (element: HTMLElement, rules: CssRules) => { for (const [key, valu
 const escapeText = (value: string) => { const element = document.createElement('span'); element.textContent = value; return element.innerHTML; };
 const languageNames: Record<string, string> = { js: 'JavaScript', javascript: 'JavaScript', ts: 'TypeScript', typescript: 'TypeScript', jsx: 'JSX', tsx: 'TSX', py: 'Python', python: 'Python', sh: 'Shell', bash: 'Shell', shell: 'Shell', powershell: 'PowerShell', ps1: 'PowerShell', java: 'Java', cs: 'C#', csharp: 'C#', cpp: 'C++', c: 'C', go: 'Go', rust: 'Rust', text: 'TEXT', plaintext: 'TEXT' };
 
+function renderTextDiagram(element: HTMLElement, code: string) {
+  const layout = { 'font-family': fontFamilies.mono, 'white-space': 'pre', 'word-break': 'normal', 'overflow-wrap': 'normal', 'letter-spacing': '0', 'word-spacing': '0', 'font-variant-ligatures': 'none', 'line-height': '1.2', 'tab-size': '4' };
+  apply(element.parentElement!, { ...layout, 'overflow-x': 'auto', 'max-width': '100%', 'box-sizing': 'border-box' });
+  apply(element, layout);
+
+  // CJK fallback fonts do not necessarily occupy two Latin monospace cells.
+  // Keep the original characters, but give wide glyphs explicit grid widths.
+  const wideGlyph = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff01-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]/gu;
+  const fragment = document.createDocumentFragment();
+  let offset = 0;
+  for (const match of code.matchAll(wideGlyph)) {
+    fragment.append(code.slice(offset, match.index));
+    const cell = document.createElement('span');
+    cell.textContent = match[0];
+    apply(cell, { display: 'inline-block', width: '2ch', 'text-align': 'center' });
+    fragment.append(cell);
+    offset = match.index + match[0].length;
+  }
+  fragment.append(code.slice(offset));
+  element.replaceChildren(fragment);
+}
+
 function themeRules(theme: Theme, settings: ArticleSettings): Record<string, CssRules> {
   const { fontSize, lineHeight, paragraphSpacing, accent } = settings;
   const palette = getCodePalette(theme.codeStyle);
@@ -93,8 +115,9 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
   section.querySelectorAll<HTMLElement>('pre code').forEach((element) => {
     const code = element.textContent || '';
     const language = element.className.match(/language-([\w+-]+)/)?.[1]?.toLowerCase();
+    const isDiagram = (!language || ['text', 'plaintext', 'txt', 'ascii'].includes(language)) && /[\u2500-\u257f]/u.test(code);
     const palette = getCodePalette(theme.codeStyle);
-    if (code.length < 40000) {
+    if (!isDiagram && code.length < 40000) {
       try {
         const result = language && hljs.getLanguage(language) ? hljs.highlight(code, { language }) : hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'css', 'json', 'bash', 'xml']);
         element.innerHTML = DOMPurify.sanitize(result.value, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'] });
@@ -106,12 +129,13 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
       const color = /comment|quote/.test(className) ? palette.comment : /keyword|selector|tag/.test(className) ? palette.keyword : /string|attr/.test(className) ? palette.string : /number|literal/.test(className) ? palette.number : /title|function/.test(className) ? palette.title : palette.text;
       span.style.color = color;
     });
+    if (isDiagram) renderTextDiagram(element, code);
     if (theme.codeStyle === 'dark' || theme.codeStyle === 'warm') {
       const pre = element.parentElement!;
       const frame = document.createElement('section');
       apply(frame, { margin: rules.pre.margin, 'border-radius': '7px', overflow: 'hidden', 'background-color': rules.pre['background-color'], 'text-align': 'left' });
       const label = document.createElement('p');
-      label.textContent = language ? languageNames[language] || language.toUpperCase() : 'CODE';
+      label.textContent = isDiagram ? 'TEXT' : language ? languageNames[language] || language.toUpperCase() : 'CODE';
       apply(label, { margin: '0', padding: '9px 16px', 'background-color': palette.header, color: palette.label, 'border-bottom': `1px solid ${palette.border}`, 'font-family': fontFamilies.mono, 'font-size': '10px', 'font-weight': '500', 'line-height': '1.5', 'letter-spacing': '0.8px', 'text-align': 'left' });
       pre.before(frame);
       frame.append(label, pre);

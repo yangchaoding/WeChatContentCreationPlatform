@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, Check, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FolderSync, HelpCircle, Plus, Search, Sparkles, Upload, X } from 'lucide-react';
+import { ArrowUpRight, Check, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FolderSync, HelpCircle, PanelLeftClose, Plus, Search, Sparkles, Upload, X } from 'lucide-react';
 import type { ArticleSummary, Workspace } from '../../shared/types';
 
 interface SidebarProps {
@@ -8,6 +8,7 @@ interface SidebarProps {
   connected: boolean;
   mobileOpen: boolean;
   onClose: () => void;
+  onCollapse: () => void;
   onSelect: (path: string) => void;
   onDirectory: () => void;
   onCreate: () => void;
@@ -16,7 +17,7 @@ interface SidebarProps {
   searchRef: React.RefObject<HTMLInputElement | null>;
 }
 
-export default function Sidebar({ workspace, selectedPath, connected, mobileOpen, onClose, onSelect, onDirectory, onCreate, onImport, onHelp, searchRef }: SidebarProps) {
+export default function Sidebar({ workspace, selectedPath, connected, mobileOpen, onClose, onCollapse, onSelect, onDirectory, onCreate, onImport, onHelp, searchRef }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const upload = useRef<HTMLInputElement>(null);
@@ -32,8 +33,8 @@ export default function Sidebar({ workspace, selectedPath, connected, mobileOpen
   const choose = (path: string) => { onSelect(path); onClose(); };
   return <>
     {mobileOpen && <button className="sidebar-scrim" onClick={onClose} aria-label="收起文章库" />}
-    <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
-      <div className="brand"><img src="/favicon.svg" alt="" /><span className="brand-name">墨排<span className="brand-roman">MOPAI</span></span><span className="brand-badge">创作，从容一点</span><button className="icon-button mobile-close" onClick={onClose} aria-label="关闭文章库"><X size={18} /></button></div>
+    <aside id="workspace-sidebar" className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`} aria-label="工作空间">
+      <div className="brand"><img src="/favicon.svg" alt="" /><span className="brand-name">墨排<span className="brand-roman">MOPAI</span></span><span className="brand-badge">创作，从容一点</span><button className="icon-button sidebar-collapse" onClick={onCollapse} title="收起工作空间" aria-label="收起工作空间" aria-controls="workspace-sidebar" aria-expanded="true"><PanelLeftClose size={18} /></button><button className="icon-button mobile-close" onClick={onClose} aria-label="关闭文章库"><X size={18} /></button></div>
       <div className="workspace-label"><span>我的工作空间</span><span className="tiny-label">LOCAL</span></div>
       <button className="workspace-switch" onClick={onDirectory} title={workspace?.directory || '连接文章目录'}><span className="folder-tile"><FolderOpen size={19} strokeWidth={1.6} /></span><span className="workspace-name"><strong>{workspace?.name === 'articles' ? '我的文章' : workspace?.name || '选择文章目录'}</strong><small>本地 Markdown 文件夹</small></span><ChevronDown size={14} /></button>
       <div className="library-heading"><span><Folder size={16} /> 文章库 <span className="count-badge">{workspace?.articles.length || 0}</span></span><button className="icon-button" title="新建文章" aria-label="新建文章" onClick={onCreate} disabled={!workspace}><Plus size={18} /></button></div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ArrowRight, Check, ChevronDown, Heart, Link2, Minus, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, Heart, Link2, Minus, PanelRightClose, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react';
 import { codePalettes, defaultSettings, fontFamilies } from '../../shared/themes';
 import type { ArticleSettings, Theme } from '../../shared/types';
 
@@ -15,7 +15,7 @@ function Switch({ checked, onChange, label, description }: { checked: boolean; o
   return <div className="switch-row"><span><strong>{label}</strong>{description && <small>{description}</small>}</span><button className={`switch ${checked ? 'on' : ''}`} role="switch" aria-checked={checked} aria-label={label} onClick={onChange}><span /></button></div>;
 }
 
-export default function ThemePanel({ themes, selected, settings, onSelect, onSettings, onExtract, onDelete, mobileOpen, onClose }: { themes: Theme[]; selected: Theme; settings: ArticleSettings; onSelect: (theme: Theme) => void; onSettings: (settings: ArticleSettings) => void; onExtract: () => void; onDelete: (theme: Theme) => void; mobileOpen: boolean; onClose: () => void }) {
+export default function ThemePanel({ themes, selected, settings, onSelect, onSettings, onExtract, onDelete, open, onClose }: { themes: Theme[]; selected: Theme; settings: ArticleSettings; onSelect: (theme: Theme) => void; onSettings: (settings: ArticleSettings) => void; onExtract: () => void; onDelete: (theme: Theme) => void; open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<'themes' | 'settings'>('themes');
   const [filter, setFilter] = useState<'all' | 'custom' | 'favorite'>('all');
   const [favorites, setFavorites] = useState<string[]>(() => { try { const value = JSON.parse(localStorage.getItem('mopai:favorites') || '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; } });
@@ -23,9 +23,9 @@ export default function ThemePanel({ themes, selected, settings, onSelect, onSet
   const filtered = themes.filter((theme) => filter === 'all' || (filter === 'custom' ? theme.custom : favorites.includes(theme.id)));
   const patch = (value: Partial<ArticleSettings>) => onSettings({ ...settings, ...value });
   return <>
-    {mobileOpen && <button className="theme-scrim" onClick={onClose} aria-label="收起主题面板" />}
-    <aside className={`theme-panel ${mobileOpen ? 'theme-panel-open' : ''}`}>
-      <div className="theme-tabs" role="tablist" aria-label="排版设置"><button role="tab" aria-selected={tab === 'themes'} className={tab === 'themes' ? 'selected' : ''} onClick={() => setTab('themes')}><Sparkles size={15} /> 排版主题</button><button role="tab" aria-selected={tab === 'settings'} className={tab === 'settings' ? 'selected' : ''} onClick={() => setTab('settings')}><SlidersHorizontal size={14} /> 样式微调</button><button className="icon-button mobile-close" onClick={onClose} aria-label="关闭主题面板"><X size={18} /></button></div>
+    {open && <button className="theme-scrim" onClick={onClose} aria-label="收起主题面板" />}
+    <aside id="theme-panel" className={`theme-panel ${open ? 'theme-panel-open' : ''}`} aria-label="排版主题">
+      <div className="theme-tabs" role="tablist" aria-label="排版设置"><button role="tab" aria-selected={tab === 'themes'} className={tab === 'themes' ? 'selected' : ''} onClick={() => setTab('themes')}><Sparkles size={15} /> 排版主题</button><button role="tab" aria-selected={tab === 'settings'} className={tab === 'settings' ? 'selected' : ''} onClick={() => setTab('settings')}><SlidersHorizontal size={14} /> 样式微调</button><button className="icon-button theme-close" onClick={onClose} title="收起排版主题" aria-label="关闭主题面板"><PanelRightClose size={18} /></button></div>
       <div className="theme-panel-scroll">
         {tab === 'themes' ? <>
           <div className="theme-intro"><h2>好文字，配好排版<span className="theme-intro-spark">✧</span></h2><p>选一种风格，让内容被认真阅读。</p></div>

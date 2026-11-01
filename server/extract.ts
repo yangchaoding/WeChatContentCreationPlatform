@@ -6,6 +6,8 @@ import type { CssRules, SemanticRole, Theme } from '../shared/types';
 import { AppError } from './workspace';
 
 const MAX_HTML = 4 * 1024 * 1024;
+// Downloaded WeChat pages include large script bundles unrelated to article styles.
+const MAX_REMOTE_HTML = 16 * 1024 * 1024;
 const allowedProperties = new Set(['color', 'background-color', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'text-indent', 'margin-top', 'margin-bottom', 'padding', 'padding-top', 'padding-bottom', 'padding-left', 'padding-right', 'border-left', 'border-bottom', 'border-top', 'border-right', 'border-color', 'border-left-color', 'border-bottom-color', 'border-width', 'border-style', 'border-radius', 'text-decoration']);
 const inheritedProperties = new Set(['color', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height', 'letter-spacing', 'text-align']);
 
@@ -65,7 +67,7 @@ export async function fetchWeChatArticle(input: string): Promise<{ html: string;
       continue;
     }
     if (!response.ok) { await response.body?.cancel(); throw new AppError(502, '微信暂时没有返回文章，请稍后重试或导入已保存的网页。'); }
-    if (Number(response.headers.get('content-length')) > MAX_HTML) { await response.body?.cancel(); throw new AppError(413, '网页超过 4 MB，请导入精简后的正文 HTML。'); }
+    if (Number(response.headers.get('content-length')) > MAX_REMOTE_HTML) { await response.body?.cancel(); throw new AppError(413, '网页下载内容超过 16 MB，请导入仅包含正文和样式的 HTML。'); }
     if (!response.body) throw new AppError(502, '没有读取到文章内容。');
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -75,15 +77,20 @@ export async function fetchWeChatArticle(input: string): Promise<{ html: string;
         const { done, value } = await reader.read();
         if (done) break;
         length += value.byteLength;
-        if (length > MAX_HTML) { await reader.cancel(); throw new AppError(413, '网页超过 4 MB，请导入精简后的正文 HTML。'); }
+        if (length > MAX_REMOTE_HTML) { await reader.cancel(); throw new AppError(413, '网页下载内容超过 16 MB，请导入仅包含正文和样式的 HTML。'); }
         chunks.push(value);
       }
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError(502, '读取文章超时，请稍后重试或导入保存的网页。');
-    }
-    const html = Buffer.concat(chunks).toString('utf8');
-    if (!cheerio.load(html)('#js_content').length) throw new AppError(422, '微信没有返回文章正文，可能需要验证或文章已失效。请在浏览器保存完整网页，再使用「导入网页」。', 'WECHAT_RESTRICTED');
+    } finally { reader.releaseLock(); }
+    const $ = cheerio.load(Buffer.concat(chunks).toString('utf8'));
+    if (!$('#js_content').length) throw new AppError(422, '微信没有返回文章正文，可能需要验证或文章已失效。请在浏览器保存完整网页，再使用「导入网页」。', 'WECHAT_RESTRICTED');
+    // Retain embedded CSS, title metadata and ancestor markup used by CSS selectors.
+    $('script, noscript, iframe').remove();
+    $.root().find('*').contents().filter((_, node) => node.type === 'comment').remove();
+    const html = $.html();
+    if (Buffer.byteLength(html) > MAX_HTML) throw new AppError(413, '移除网页脚本后的内容仍超过 4 MB，请导入仅包含正文和样式的 HTML。');
     return { html, url: url.href };
   }
   throw new AppError(502, '文章链接重定向次数过多，请复制最终文章地址。');

@@ -31,6 +31,9 @@ describe('Theme extraction', () => {
   it('does not fabricate a theme from a validation or empty page', () => {
     expect(() => extractTheme('<html><body>请完成验证</body></html>')).toThrow('正文');
   });
+  it('keeps the separate size limit for directly imported HTML', () => {
+    expect(() => extractTheme('x'.repeat(4 * 1024 * 1024 + 1))).toThrow('网页不能超过 4 MB');
+  });
 });
 
 describe('WeChat URL and fetch boundaries', () => {
@@ -55,8 +58,49 @@ describe('WeChat URL and fetch boundaries', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(articleHtml, { status: 200 })));
     expect((await fetchWeChatArticle('https://mp.weixin.qq.com/s/test')).html).toContain('js_content');
   });
-  it('enforces a body-size limit even when content length is omitted', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('x'.repeat(4 * 1024 * 1024 + 1), { status: 200 })));
-    await expect(fetchWeChatArticle('https://mp.weixin.qq.com/s/test')).rejects.toMatchObject({ status: 413 });
+  it.each(['declared', 'compressed', 'omitted'])('extracts pages over 4 MB after stripping scripts (%s content length)', async (length) => {
+    const largeScript = `<script>window.pageData = "${'x'.repeat(4 * 1024 * 1024)}";</script>`;
+    const html = articleHtml.replace('</head>', `${largeScript}</head>`).replace('</body>', '<!-- unneeded comment --><noscript>fallback</noscript><iframe src="https://example.com"></iframe></body>');
+    const headers = new Headers();
+    if (length !== 'omitted') headers.set('content-length', length === 'declared' ? String(Buffer.byteLength(html)) : '950000');
+    if (length === 'compressed') headers.set('content-encoding', 'gzip');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(html, { headers })));
+    const result = await fetchWeChatArticle('https://mp.weixin.qq.com/s/test');
+    expect(Buffer.byteLength(result.html)).toBeLessThan(4 * 1024 * 1024);
+    expect(result.html).not.toMatch(/<script|<noscript|<iframe|<!--/);
+    const theme = extractTheme(result.html, result.url);
+    expect(theme).toMatchObject({ sourceTitle: '一篇值得阅读的文章', sourceUrl: 'https://mp.weixin.qq.com/s/test', accent: '#315c97', ink: '#333333', fontSize: 16, lineHeight: 1.8 });
+    expect(theme.styles?.h2?.['border-bottom']).toBe('1px solid #315c97');
+  });
+  it('preserves ancestor selectors, inline styles, metadata and split UTF-8 characters', async () => {
+    const html = '<html><head><meta property="og:title" content="中文标题"><style>.wrapper #js_content h2 {color:#987654}</style></head><body style="font-family:Microsoft YaHei"><main class="wrapper" style="font-size:18px;color:#456789"><div id="js_content"><h2>中文章节标题</h2><p>这篇文章保留祖先容器的字号和颜色，以及通过上层类名匹配的章节颜色。</p></div></main></body></html>';
+    const bytes = new TextEncoder().encode(html);
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7)); controller.close(); } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream)));
+    const result = await fetchWeChatArticle('https://mp.weixin.qq.com/s/test');
+    expect(extractTheme(result.html)).toMatchObject({ sourceTitle: '中文标题', accent: '#987654', ink: '#456789', fontSize: 18 });
+  });
+  it('still rejects oversized article markup after script removal', async () => {
+    const html = articleHtml.replace('</body>', `<div>${'x'.repeat(4 * 1024 * 1024)}</div></body>`);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(html)));
+    await expect(fetchWeChatArticle('https://mp.weixin.qq.com/s/test')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('移除网页脚本后') });
+  });
+  it('rejects a declared download over 16 MB and cancels without reading it', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream({ cancel });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { headers: { 'content-length': String(16 * 1024 * 1024 + 1) } })));
+    await expect(fetchWeChatArticle('https://mp.weixin.qq.com/s/test')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('16 MB') });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it.each(['omitted', 'compressed'])('bounds actual downloaded bytes with %s size headers', async (length) => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024);
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(chunk); }, cancel });
+    const headers = new Headers();
+    if (length === 'compressed') { headers.set('content-length', '1000'); headers.set('content-encoding', 'gzip'); }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { headers })));
+    await expect(fetchWeChatArticle('https://mp.weixin.qq.com/s/test')).rejects.toMatchObject({ status: 413, message: expect.stringContaining('16 MB') });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(stream.locked).toBe(false);
   });
 });

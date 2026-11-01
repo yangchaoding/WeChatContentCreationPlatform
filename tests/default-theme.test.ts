@@ -187,4 +187,23 @@ describe('default theme in the workbench', () => {
     await run(() => workbench.flush());
     expect(articles.get('article.md')!.settings?.fontSize).toBe(20);
   });
+
+  it('inserts a completed cover into the latest draft and saves it without losing intervening edits', async () => {
+    const cover = { requestId: 'example', directory: 'D:/articles', articlePath: 'article.md', assetPath: 'cover.png', markdownPath: './cover.png', width: 1024, height: 1024 };
+    await run(() => workbench.setContent('# Latest draft\n\nWritten during generation'));
+    await run(() => workbench.insertGeneratedCover(cover));
+    expect(workbench.content).toBe('![文章封面](./cover.png)\n\n# Latest draft\n\nWritten during generation');
+    await run(() => workbench.insertGeneratedCover(cover));
+    expect(workbench.content.match(/!\[文章封面\]/g)).toHaveLength(1);
+    await run(() => workbench.flush());
+    expect(articles.get('article.md')?.content).toBe(workbench.content);
+  });
+
+  it('refuses to insert a cover if the user has switched article or workspace', async () => {
+    const cover = { requestId: 'example', directory: 'D:/articles', articlePath: 'article.md', assetPath: 'cover.png', markdownPath: './cover.png', width: 1024, height: 1024 };
+    await run(() => workbench.selectArticle('saved.md'));
+    expect(() => workbench.insertGeneratedCover(cover)).toThrow('切回原文章');
+    expect(() => workbench.insertGeneratedCover({ ...cover, directory: 'elsewhere', articlePath: 'saved.md' })).toThrow('切回原文章');
+    expect(workbench.content).toBe('# saved.md');
+  });
 });

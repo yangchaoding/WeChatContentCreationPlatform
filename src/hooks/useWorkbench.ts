@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { builtInThemes, defaultSettings, systemDefaultTheme } from '../../shared/themes';
 import type { Article, ArticleSettings, Theme, ThemeLibrary, Workspace } from '../../shared/types';
 import { api, ApiError, errorMessage, query } from '../lib/api';
+import { insertCover, type GeneratedCover } from '../../shared/images';
 
 export type Notify = (message: string, kind?: 'success' | 'error' | 'info') => void;
 export type SaveStatus = 'saved' | 'pending' | 'saving' | 'error';
@@ -345,5 +346,12 @@ export function useWorkbench(notify: Notify) {
     } catch (error) { notify(errorMessage(error), 'error'); }
   }, [applyArticle, chooseInitial, notify, updateWorkspace]);
 
-  return { workspace, article, content, setContent, settings, setSettings, themes, defaultThemeId, savingDefaultThemeId, setDefaultTheme, theme: themes.find((item) => item.id === settings.themeId) || themes.find((item) => item.id === defaultThemeId) || systemDefaultTheme, loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
+  const insertGeneratedCover = useCallback((cover: GeneratedCover) => {
+    if (switchingRef.current || workspaceRef.current?.directory !== cover.directory || articleRef.current?.path !== cover.articlePath) {
+      throw new Error('封面已保存到原文章目录。请切回原文章后，再点击插入。');
+    }
+    setContent(insertCover(contentRef.current, cover.markdownPath));
+  }, [setContent]);
+
+  return { workspace, article, content, setContent, insertGeneratedCover, settings, setSettings, themes, defaultThemeId, savingDefaultThemeId, setDefaultTheme, theme: themes.find((item) => item.id === settings.themeId) || themes.find((item) => item.id === defaultThemeId) || systemDefaultTheme, loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
 }

@@ -216,6 +216,11 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
       if (!['style', 'href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'start'].includes(attribute.name)) element.removeAttribute(attribute.name);
     }
   });
+  const cover = section.querySelector<HTMLImageElement>('img[alt="文章封面"]');
+  if (cover && /(?:^|\/)cover-[\da-f-]{36}\.png$/i.test(localImageUrl(cover.src)?.searchParams.get('path') || '')) {
+    const paragraph = cover.parentElement;
+    if (paragraph?.tagName === 'P' && paragraph.childNodes.length === 1) section.prepend(paragraph);
+  }
   const plain = section.cloneNode(true) as HTMLElement;
   plain.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,tr').forEach((element) => element.append(document.createTextNode('\n')));
   return { html: section.outerHTML, text: plain.textContent?.trim() || '', localImages, title };
@@ -243,17 +248,83 @@ export async function copyPlainText(content: string) {
   if (!copied) throw new Error('未能复制 Markdown，请允许剪贴板权限后重试，或在编辑区全选复制。');
 }
 
+function localImageUrl(source: string): URL | null {
+  try {
+    const url = new URL(source, window.location.origin);
+    return url.origin === window.location.origin && url.pathname === '/api/assets' ? url : null;
+  } catch { return null; }
+}
+
+async function pngBlob(source: string): Promise<Blob> {
+  const url = localImageUrl(source);
+  if (!url) throw new Error('请选择本地生成的封面图片。');
+  url.searchParams.set('format', 'png');
+  const response = await fetch(url.href);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || '本地图片读取失败，请检查文件后重试。');
+  }
+  if (response.headers.get('content-type')?.split(';')[0] !== 'image/png') throw new Error('没有读到 PNG 图片，请检查本地服务。');
+  return new Blob([await response.arrayBuffer()], { type: 'image/png' });
+}
+
+function dataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('图片编码失败，请重试。'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function embedLocalImages(rendered: RenderResult): Promise<RenderResult> {
+  const container = document.createElement('div');
+  container.innerHTML = rendered.html;
+  const cache = new Map<string, string>();
+  let totalBytes = 0;
+  for (const image of container.querySelectorAll('img')) {
+    const source = image.getAttribute('src') || '';
+    if (!localImageUrl(source)) continue;
+    let encoded = cache.get(source);
+    if (!encoded) {
+      const blob = await pngBlob(source);
+      totalBytes += blob.size;
+      if (totalBytes > 30 * 1024 * 1024) throw new Error('文章图片总大小超过 30 MB，请压缩图片后复制。');
+      encoded = await dataUrl(blob);
+      cache.set(source, encoded);
+    }
+    image.src = encoded;
+  }
+  return { ...rendered, html: container.innerHTML, localImages: 0 };
+}
+
+export function coverImageSource(rendered: RenderResult): string | null {
+  const container = document.createElement('div');
+  container.innerHTML = rendered.html;
+  return [...container.querySelectorAll<HTMLImageElement>('img')].find((image) => image.alt === '文章封面' && localImageUrl(image.src))?.src || null;
+}
+
+export async function copyImage(source: string) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('浏览器不支持复制图片，请下载 PNG 后上传到公众号。');
+  const png = pngBlob(source);
+  try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]); }
+  catch { await png.catch(() => {}); throw new Error('未能复制图片，请允许剪贴板权限，或下载 PNG 后上传。'); }
+}
+
 export async function copyRichText(rendered: RenderResult) {
+  const prepared = embedLocalImages(rendered);
+  // Start the clipboard operation within the click gesture; image fetches resolve its payload later.
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     try {
-      await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([rendered.html], { type: 'text/html' }), 'text/plain': new Blob([rendered.text], { type: 'text/plain' }) })]);
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': prepared.then((value) => new Blob([value.html], { type: 'text/html' })), 'text/plain': new Blob([rendered.text], { type: 'text/plain' }) })]);
       return;
     } catch { /* Browsers without rich clipboard permission can still use a selection. */ }
   }
+  const embedded = await prepared;
   const holder = document.createElement('div');
   holder.contentEditable = 'true';
   holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:500px;';
-  holder.innerHTML = rendered.html;
+  holder.innerHTML = embedded.html;
   document.body.append(holder);
   const selection = window.getSelection();
   const previous = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
@@ -280,6 +351,7 @@ export function downloadFile(content: string, filename: string, type = 'text/mar
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-export function exportHtml(rendered: RenderResult) {
-  downloadFile(`<!doctype html>\n<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeText(rendered.title)}</title></head><body style="margin:0 auto;max-width:677px;background:#fff">${rendered.html}</body></html>`, `${rendered.title}.html`, 'text/html;charset=utf-8');
+export async function exportHtml(rendered: RenderResult) {
+  const embedded = await embedLocalImages(rendered);
+  downloadFile(`<!doctype html>\n<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeText(rendered.title)}</title></head><body style="margin:0 auto;max-width:677px;background:#fff">${embedded.html}</body></html>`, `${rendered.title}.html`, 'text/html;charset=utf-8');
 }

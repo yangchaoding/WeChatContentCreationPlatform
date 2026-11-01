@@ -4,17 +4,18 @@ import Sidebar from './components/Sidebar';
 import ThemePanel from './components/ThemePanel';
 import Editor from './components/Editor';
 import Modal from './components/Modal';
+import ImageGenerationDialog from './components/ImageGenerationDialog';
 import { DirectoryDialog, ExtractDialog, HelpDialog, NewArticleDialog } from './components/Dialogs';
 import { useWorkbench } from './hooks/useWorkbench';
 import { useSynchronizedScroll } from './hooks/useSynchronizedScroll';
 import { articleTitle, wordCount } from '../shared/document';
 import type { Theme } from '../shared/types';
-import { copyPlainText, copyRichText, downloadFile, exportHtml, renderMarkdown } from './lib/render';
+import { copyImage, coverImageSource, copyPlainText, copyRichText, downloadFile, exportHtml, renderMarkdown } from './lib/render';
 import { errorMessage } from './lib/api';
 
 interface Toast { id: number; message: string; kind: 'success' | 'error' | 'info' }
 type View = 'edit' | 'split' | 'preview';
-type Dialog = 'directory' | 'new' | 'extract' | 'help' | null;
+type Dialog = 'directory' | 'new' | 'extract' | 'help' | 'image' | null;
 
 export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -48,6 +49,7 @@ export default function App() {
   const rendered = useMemo(() => renderMarkdown(deferredContent, theme, settings, { filename: article?.name, articlePath: article?.path, directory: workspace?.directory }), [deferredContent, theme, settings, article?.name, article?.path, workspace?.directory]);
   const title = useMemo(() => articleTitle(content, article?.name || '开始你的创作'), [content, article?.name]);
   const words = useMemo(() => wordCount(deferredContent), [deferredContent]);
+  const coverSource = useMemo(() => coverImageSource(rendered), [rendered]);
   useSynchronizedScroll({ editorRef, previewRef, view, articleKey: `${workspace?.directory}:${article?.path}:${workbench.loading}`, revision: rendered.html });
 
   useEffect(() => {
@@ -80,7 +82,7 @@ export default function App() {
       await copyRichText(current);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2400);
-      notify(current.localImages ? `已复制排版。文中 ${current.localImages} 张本地图片请在公众号后台上传。` : '排版已复制，去公众号正文编辑区粘贴吧。');
+      notify(current.localImages ? `排版和 ${current.localImages} 张 PNG 图片已复制。若粘贴后图片被过滤，可从「导出」单独复制或下载封面。` : '排版已复制，去公众号正文编辑区粘贴吧。');
     } catch (error) { notify(errorMessage(error), 'error'); }
     finally { setCopying(false); }
   };
@@ -93,10 +95,18 @@ export default function App() {
     } catch (error) { notify(errorMessage(error), 'error'); }
     finally { setCopyingMarkdown(false); }
   };
-  const exportCurrent = () => {
-    exportHtml(renderMarkdown(content, theme, settings, { filename: article?.name, articlePath: article?.path, directory: workspace?.directory }));
+  const exportCurrent = async () => {
     setExportMenu(false);
-    notify('已导出包含排版样式的 HTML');
+    try {
+      await exportHtml(renderMarkdown(content, theme, settings, { filename: article?.name, articlePath: article?.path, directory: workspace?.directory }));
+      notify('已导出包含样式与本地图片的 HTML');
+    } catch (error) { notify(errorMessage(error), 'error'); }
+  };
+  const copyCover = async () => {
+    if (!coverSource) return;
+    setExportMenu(false);
+    try { await copyImage(coverSource); notify('封面 PNG 已复制，可在公众号正文中粘贴。'); }
+    catch (error) { notify(errorMessage(error), 'error'); }
   };
   const downloadDraft = () => { downloadFile(content, article?.name || `${title}.md`); setExportMenu(false); };
   const showDialog = (value: Dialog) => { setDialog(value); setSidebarOpen(false); setThemesOpen(false); };
@@ -108,7 +118,7 @@ export default function App() {
     <div className="app-main"><header className="topbar"><div className="breadcrumbs"><button className="icon-button sidebar-toggle" onClick={() => setSidebarCollapsed((value) => !value)} title={sidebarCollapsed ? '展开工作空间' : '收起工作空间'} aria-label={sidebarCollapsed ? '展开工作空间' : '收起工作空间'} aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar">{sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}</button><button className="icon-button library-toggle" onClick={() => setSidebarOpen((value) => !value)} aria-label="打开文章库" aria-expanded={sidebarOpen} aria-controls="workspace-sidebar"><PanelLeft size={19} /></button><LayoutDashboard size={15} /><span>工作空间</span><ChevronRight size={13} /><strong>文章排版</strong></div><span className="topbar-motto">让文字，自成风格<span>✧</span></span><div className="topbar-end"><span className="local-badge"><span /> 本地工作台</span><button className="icon-button" title="使用指南" aria-label="打开使用指南" onClick={() => showDialog('help')}><CircleHelp size={18} strokeWidth={1.5} /></button><span className="user-avatar" aria-hidden="true">墨</span></div></header>
       <div className="content-layout"><main className="workbench">
         <div className="document-header"><div className="document-heading"><div className="document-heading-line"><span className="document-icon"><FileText size={18} strokeWidth={1.5} /></span><h1 title={title}>{article ? title : '让好内容，从这里开始'}</h1></div><div className="document-subline"><span>{article?.path || '你的 Markdown 创作空间'}</span>{article && <><i /> <span className={`save-state state-${workbench.saveStatus}`}>{workbench.saveStatus === 'saving' ? <LoaderCircle size={11} className="spin" /> : workbench.saveStatus === 'saved' ? <CheckCheck size={12} /> : workbench.saveStatus === 'error' ? <span className="error-dot" /> : <span className="pending-dot" />}{({ saved: '已自动保存', pending: '等待保存', saving: '正在保存', error: '保存遇到问题' })[workbench.saveStatus]}</span></>}</div></div>
-          <div className="document-actions"><div className="export-control" ref={menuRef}><button className="button export-button" aria-label="导出文章" aria-expanded={exportMenu} disabled={!article} onClick={() => setExportMenu(!exportMenu)}><Download size={16} /><span>导出</span><ChevronDown size={12} /></button>{exportMenu && <div className="dropdown-menu" role="menu"><button role="menuitem" onClick={exportCurrent}><Code2 size={15} /><span>导出排版 HTML<small>保留文章的完整样式</small></span></button><button role="menuitem" onClick={downloadDraft}><FileText size={15} /><span>下载 Markdown<small>保留原始文字与标记</small></span></button></div>}</div><button className={`button button-primary copy-button ${copied ? 'copied' : ''}`} onClick={() => void copy()} disabled={!article || copying} aria-label="复制到公众号">{copying ? <LoaderCircle size={16} className="spin" /> : copied ? <Check size={16} /> : <Copy size={16} />}<span>{copied ? '复制成功' : '复制到公众号'}</span></button></div>
+          <div className="document-actions"><button className="button button-secondary generate-cover-button" disabled={!article || workbench.switching} onClick={() => showDialog('image')}><Sparkles size={15} /><span>生成封面</span></button><div className="export-control" ref={menuRef}><button className="button export-button" aria-label="导出文章" aria-expanded={exportMenu} disabled={!article} onClick={() => setExportMenu(!exportMenu)}><Download size={16} /><span>导出</span><ChevronDown size={12} /></button>{exportMenu && <div className="dropdown-menu" role="menu"><button role="menuitem" onClick={() => void exportCurrent()}><Code2 size={15} /><span>导出排版 HTML<small>保留文章的完整样式</small></span></button><button role="menuitem" onClick={downloadDraft}><FileText size={15} /><span>下载 Markdown<small>保留原始文字与标记</small></span></button>{coverSource && <><button role="menuitem" onClick={() => void copyCover()}><Copy size={15} /><span>复制封面图片<small>以 PNG 图片粘贴到公众号</small></span></button><a role="menuitem" href={`${coverSource}&format=png&download=1`} download onClick={() => setExportMenu(false)}><Download size={15} /><span>下载封面 PNG<small>可在公众号后台上传</small></span></a></>}</div>}</div><button className={`button button-primary copy-button ${copied ? 'copied' : ''}`} onClick={() => void copy()} disabled={!article || copying} aria-label="复制到公众号">{copying ? <LoaderCircle size={16} className="spin" /> : copied ? <Check size={16} /> : <Copy size={16} />}<span>{copied ? '复制成功' : '复制到公众号'}</span></button></div>
         </div>
         <div className="view-toolbar"><div className="view-tabs" role="tablist" aria-label="编辑视图">{viewOptions.map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={14} />{label}</button>)}</div><div className="view-toolbar-end"><span className="current-theme"><span style={{ background: settings.accent }} />{theme.name}</span><button className="icon-button refresh-button" title="同步本地文件" aria-label="同步本地文件" onClick={() => void workbench.refresh(true)}><RefreshCw size={14} /></button><span className="toolbar-divider" /><span className="live-preview-label"><span /> 实时预览</span><button className="theme-toggle text-button" onClick={() => setThemesOpen((value) => !value)} title={themesOpen ? '收起排版主题' : '展开排版主题'} aria-label={themesOpen ? '收起排版主题' : '展开排版主题'} aria-expanded={themesOpen} aria-controls="theme-panel"><PanelRight size={14} /> 排版主题</button></div></div>
         {workbench.saveError && <div className="save-error-banner" role="alert"><span>{workbench.saveError}</span><div><button onClick={() => void workbench.retrySave()}>重试保存</button><button onClick={() => { downloadDraft(); void workbench.reloadArticle(); }}>下载草稿并重载</button></div></div>}
@@ -116,12 +126,13 @@ export default function App() {
           {view !== 'preview' && <Editor key={`${workspace?.directory}:${article.path}`} inputRef={editorRef} value={content} onChange={setContent} filename={article.name} disabled={workbench.switching} onCopy={() => void copyMarkdown()} copying={copyingMarkdown} />}
           {view !== 'edit' && <section className="preview-panel"><div className="preview-toolbar"><span className="preview-caption"><Eye size={13} />文章预览</span><div className="device-switch" role="group" aria-label="预览设备"><button className={device === 'mobile' ? 'active' : ''} onClick={() => setDevice('mobile')} aria-pressed={device === 'mobile'} aria-label="手机预览"><Smartphone size={13} /><span>手机</span></button><button className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')} aria-pressed={device === 'desktop'} aria-label="桌面预览"><Monitor size={13} /><span>桌面</span></button></div><span className="preview-dimension">{previewWidth} <span>px</span></span></div><div className="preview-canvas" ref={previewRef}><div className={`article-paper device-${device}`} ref={paperRef} style={{ backgroundColor: theme.styles?.body?.['background-color'] || '#ffffff' }}><div className="paper-topline"><span /><span /><span /><i /></div><div className="rendered-article" role="region" aria-label="文章预览内容" dangerouslySetInnerHTML={{ __html: rendered.html }} /><div className="paper-end"><span /><i>✧</i><span /></div></div><div className="preview-end-note"><span /> 每一个好想法，都值得被好好呈现 <span /></div></div></section>}
         </div>}
-        <footer className="statusbar"><div><span><AlignLeft size={12} /> {words.toLocaleString()} 字</span><i /><span>约 {Math.max(1, Math.ceil(words / 350))} 分钟阅读</span>{workspace?.truncated && <span className="status-warning">部分大文件或深层目录未载入</span>}</div><div>{rendered.localImages > 0 ? <span className="status-warning">{rendered.localImages} 张本地图片需在公众号上传</span> : <span className="wechat-ready"><ShieldCheck size={12} /> 为公众号阅读而设计</span>}<span className="status-version">MOPAI 1.0</span></div></footer>
+        <footer className="statusbar"><div><span><AlignLeft size={12} /> {words.toLocaleString()} 字</span><i /><span>约 {Math.max(1, Math.ceil(words / 350))} 分钟阅读</span>{workspace?.truncated && <span className="status-warning">部分大文件或深层目录未载入</span>}</div><div>{rendered.localImages > 0 ? <span className="status-warning">{rendered.localImages} 张本地图片 · 复制时嵌入 PNG</span> : <span className="wechat-ready"><ShieldCheck size={12} /> 为公众号阅读而设计</span>}<span className="status-version">MOPAI 1.0</span></div></footer>
       </main><ThemePanel themes={themes} selected={theme} settings={settings} onSelect={workbench.selectTheme} onSettings={workbench.setSettings} onExtract={() => showDialog('extract')} onDelete={setPendingDelete} defaultThemeId={workbench.defaultThemeId} onSetDefault={(theme) => void workbench.setDefaultTheme(theme)} savingDefaultThemeId={workbench.savingDefaultThemeId} open={themesOpen} onClose={() => setThemesOpen(false)} /></div>
     </div>
     {dialog === 'directory' && <DirectoryDialog directory={workspace?.directory || ''} onSelect={workbench.changeDirectory} onClose={closeDialog} />}
     {dialog === 'new' && <NewArticleDialog directory={workspace?.directory || ''} onCreate={async (name) => { await workbench.createArticle(name); setView('split'); }} onClose={closeDialog} />}
     {dialog === 'extract' && <ExtractDialog onApply={workbench.addTheme} onClose={closeDialog} />}
+    {dialog === 'image' && article && workspace && <ImageGenerationDialog directory={workspace.directory} articlePath={article.path} content={content} onInsert={workbench.insertGeneratedCover} onClose={closeDialog} />}
     {dialog === 'help' && <HelpDialog onClose={closeDialog} />}
     {pendingDelete && <Modal title={`移除「${pendingDelete.name}」？`} subtitle="移除后，可以从原文再次提取这个主题。" onClose={() => setPendingDelete(null)} footer={<><button className="button button-secondary" onClick={() => setPendingDelete(null)}>保留主题</button><button className="button button-danger" onClick={() => { void workbench.deleteTheme(pendingDelete); setPendingDelete(null); }}>移除主题</button></>}><p className="delete-explanation">已经保存的 Markdown 文章会保留。使用此主题的文章下次打开时，会恢复到默认主题。</p></Modal>}
     {dragging && <div className="drop-overlay"><div><UploadCloud size={40} strokeWidth={1.3} /><h2>把灵感，放到这里</h2><p>松开鼠标，导入 Markdown 文章</p></div></div>}

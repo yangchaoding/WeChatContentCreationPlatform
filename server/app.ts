@@ -7,6 +7,8 @@ import { builtInThemes, defaultSettings } from '../shared/themes';
 import type { ArticleSettings, SemanticRole, Theme } from '../shared/types';
 import { AppError, WorkspaceService } from './workspace';
 import { extractTheme, fetchWeChatArticle, safeStyles } from './extract';
+import fs from 'node:fs/promises';
+import { compatiblePng, ImageService } from './images';
 
 const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => { Promise.resolve(handler(req, res)).catch(next); };
 const textField = (value: unknown, name: string, max = 2048) => {
@@ -48,6 +50,8 @@ function validateTheme(input: unknown): Theme {
 export async function createLocalApp(options: { storageDirectory: string; initialDirectory: string; projectDirectory?: string; watch?: boolean; distDirectory?: string }) {
   const service = new WorkspaceService(options.storageDirectory, options.initialDirectory, options.projectDirectory);
   await service.init();
+  const images = new ImageService(service);
+  await images.init();
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -136,7 +140,25 @@ export async function createLocalApp(options: { storageDirectory: string; initia
     const target = await service.resolveFile(textField(req.query.path, '图片路径'), { markdown: false });
     if (!/\.(png|jpe?g|gif|webp|avif|svg)$/i.test(target)) throw new AppError(400, '仅支持常见图片格式。');
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    if (req.query.format === 'png') {
+      if ((await fs.stat(target)).size > 20 * 1024 * 1024) throw new AppError(413, '图片超过 20 MB，无法复制。');
+      const png = await compatiblePng(await fs.readFile(target));
+      if (req.query.download === '1') res.attachment(`${path.basename(target, path.extname(target))}.png`);
+      return res.type('png').send(png.data);
+    }
     res.sendFile(target);
+  }));
+  app.get('/api/image-settings', (_req, res) => res.json(images.publicSettings));
+  app.put('/api/image-settings', asyncRoute(async (req, res) => res.json(await images.saveSettings(req.body))));
+  app.post('/api/images/generate', asyncRoute(async (req, res) => {
+    checkScope(req);
+    res.json(await images.generate({
+      requestId: textField(req.body?.requestId, '生成请求标识', 50),
+      directory: textField(req.body?.directory, '文章目录'),
+      articlePath: textField(req.body?.articlePath, '文章路径'),
+      content: textField(req.body?.content, '文章内容', 2 * 1024 * 1024),
+      style: textField(req.body?.style ?? '', '画面要求', 2000),
+    }));
   }));
   app.get('/api/themes', (_req, res) => res.json(service.themeLibrary));
   app.put('/api/themes/default', asyncRoute(async (req, res) => {

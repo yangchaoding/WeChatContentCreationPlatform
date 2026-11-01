@@ -90,7 +90,7 @@ export function ExtractDialog({ onApply, onClose }: { onApply: (theme: Theme) =>
 export function HelpDialog({ onClose }: { onClose: () => void }) {
   return <Modal title="从好内容，到好看的公众号" subtitle="专注写作，排版交给墨排。" onClose={onClose} wide footer={<button className="button button-primary" onClick={onClose}>开始创作 <ArrowRight size={15} /></button>}>
     <div className="help-steps"><div><span className="help-step-icon"><FolderOpen size={23} /></span><h3>01 · 连接文章</h3><p>选择放置 .md 文章的本地目录。新增文件会自动出现，也可以直接新建或导入文章。</p></div><div><span className="help-step-icon"><Sparkles size={23} /></span><h3>02 · 找到风格</h3><p>选择主题，微调字号、行距和颜色。每篇文章的排版设置都会自动保存。</p></div><div><span className="help-step-icon"><ClipboardCheck size={23} /></span><h3>03 · 一键复制</h3><p>点击「复制到公众号」，然后在公众号后台的图文正文编辑区按 Ctrl + V 粘贴。</p></div></div>
-    <div className="help-details"><h3>让发布更顺利的几个小细节</h3><p><strong>本地图片</strong> 可以在墨排预览，粘贴后请在公众号中单独上传并确认位置。公众号也可能对远程图片做防盗链处理。</p><p><strong>文章链接</strong> 可能受公众号外链规则限制。在「样式微调」开启「文末附上外链」，可保留完整的参考地址。</p><p><strong>主题提取</strong> 复用正文可识别的颜色、字体与样式。装饰图片、动态效果、外部 CSS 不会被提取；复杂布局与原文可能略有差异。</p><p><strong>本地保存</strong> 编辑会自动写回原文件。遇到外部修改冲突时，请先下载当前草稿，再重载文件。</p></div>
+    <div className="help-details"><h3>让发布更顺利的几个小细节</h3><p><strong>本地图片</strong> 复制和导出时会转换并嵌入 PNG。若公众号过滤粘贴的图片，可在「导出」中单独复制封面或下载后上传。远程图片仍可能受防盗链限制。</p><p><strong>文章链接</strong> 可能受公众号外链规则限制。在「样式微调」开启「文末附上外链」，可保留完整的参考地址。</p><p><strong>主题提取</strong> 复用正文可识别的颜色、字体与样式。装饰图片、动态效果、外部 CSS 不会被提取；复杂布局与原文可能略有差异。</p><p><strong>本地保存</strong> 编辑会自动写回原文件。遇到外部修改冲突时，请先下载当前草稿，再重载文件。</p></div>
     <div className="shortcuts"><span><kbd>Ctrl / ⌘</kbd><kbd>S</kbd> 保存文章</span><span><kbd>Ctrl / ⌘</kbd><kbd>K</kbd> 搜索文章</span></div>
   </Modal>;
 }

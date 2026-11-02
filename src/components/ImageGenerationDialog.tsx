@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Download, LoaderCircle, Settings2, Sparkles } from 'lucide-react';
+import { Check, Copy, Download, LoaderCircle, RefreshCw, Settings2, Sparkles } from 'lucide-react';
 import Modal from './Modal';
 import { api, errorMessage, query } from '../lib/api';
 import { copyImage } from '../lib/render';
-import { coverRatios, defaultCoverStyle, defaultImageSettings, type GeneratedCover, type ImageSettings } from '../../shared/images';
+import { coverRatios, defaultCoverStyle, defaultImageSettings, imageProtocols, protocolPath, switchImageProtocol, type GeneratedCover, type ImageModel, type ImageModelList, type ImageProtocol, type ImageSettings } from '../../shared/images';
 
 export default function ImageGenerationDialog({ directory, articlePath, content, onInsert, onClose }: {
   directory: string;
@@ -26,6 +26,13 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
   const [result, setResult] = useState<GeneratedCover | null>(null);
   const [inserted, setInserted] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  const [models, setModels] = useState<ImageModel[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [manualModel, setManualModel] = useState(false);
+  const modelsRequest = useRef(0);
+  const modelsController = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
   const pending = useRef<{ requestId: string; directory: string; articlePath: string; content: string; style: string } | null>(null);
   const disabled = loading || saving || busy;
@@ -37,8 +44,31 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
       setSettings(value);
       setConfigOpen(!value.hasApiKey);
     }).catch((failure) => { if (active) { setError(errorMessage(failure)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => { active = false; modelsRequest.current++; modelsController.current?.abort(); };
   }, []);
+
+  const invalidateModels = () => {
+    modelsRequest.current++;
+    modelsController.current?.abort();
+    setModels([]); setModelsLoaded(false); setModelsLoading(false); setModelsError('');
+  };
+  const updateConnection = (patch: Partial<ImageSettings>) => {
+    invalidateModels();
+    setSettings((value) => ({ ...value, ...patch }));
+  };
+  const fetchModels = async () => {
+    if (modelsLoading || locked) return;
+    const sequence = ++modelsRequest.current;
+    modelsController.current?.abort();
+    modelsController.current = new AbortController();
+    setModelsLoading(true); setModelsError('');
+    try {
+      const value = await api<ImageModelList>('/images/models', { method: 'POST', body: { ...settings, apiKey, clearApiKey }, signal: modelsController.current.signal });
+      if (sequence !== modelsRequest.current) return;
+      setModels(value.models); setModelsLoaded(true);
+    } catch (failure) { if (sequence === modelsRequest.current && (failure as Error).name !== 'AbortError') setModelsError(errorMessage(failure)); }
+    finally { if (sequence === modelsRequest.current) setModelsLoading(false); }
+  };
 
   const saveSettings = async () => {
     const saved = await api<ImageSettings>('/image-settings', { method: 'PUT', body: { ...settings, apiKey, clearApiKey } });
@@ -105,30 +135,34 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
     <button className="button button-secondary" disabled={busy || saving} onClick={onClose}>{result ? '完成' : '关闭'}</button>
     {result ? <button className="button button-secondary" onClick={reset}>准备重新生成</button> : <>
       {attempted && <button className="text-button" disabled={busy} onClick={reset}>调整后重新生成</button>}
-      <button className="button button-primary" disabled={disabled || loadFailed || !content.trim()} onClick={() => void generate()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}{busy ? '正在生成并保存…' : attempted ? '重试同一请求' : '生成并插入'}</button>
+      <button className="button button-primary" disabled={disabled || modelsLoading || loadFailed || !content.trim() || !settings.model.trim()} onClick={() => void generate()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}{busy ? '正在生成并保存…' : attempted ? '重试同一请求' : '生成并插入'}</button>
     </>}
   </>}>
     {loading ? <p className="field-help"><LoaderCircle size={15} className="spin" /> 正在读取接口配置…</p> : <>
       <details className="image-configuration" open={configOpen} onToggle={(event) => setConfigOpen(event.currentTarget.open)}>
         <summary><Settings2 size={15} /> 接口配置 <span>{settings.hasApiKey ? '已保存密钥' : '尚未配置密钥'}</span></summary>
         <div className="image-settings-grid">
-          <label className="field-label image-field-full">地址类型<select className="text-input" value={settings.addressMode} disabled={locked} onChange={(event) => setSettings({ ...settings, addressMode: event.target.value as ImageSettings['addressMode'] })}><option value="endpoint">完整请求地址（原样使用）</option><option value="base">Base URL（追加 /images/generations）</option></select></label>
-          <label className="field-label image-field-full">请求地址<input className="text-input" value={settings.address} disabled={locked} onChange={(event) => setSettings({ ...settings, address: event.target.value })} placeholder="https://api.openai.com/v1/images/generations" autoComplete="off" /></label>
-          <label className="field-label image-field-full">API 密钥<input className="text-input" type="password" value={apiKey} disabled={locked} onChange={(event) => setApiKey(event.target.value)} placeholder={settings.hasApiKey ? '已保存，留空保留；更换渠道请填写新密钥' : 'sk-…'} autoComplete="new-password" spellCheck={false} /></label>
-          {settings.hasApiKey && <label className="image-key-clear image-field-full"><input type="checkbox" checked={clearApiKey} disabled={locked} onChange={(event) => setClearApiKey(event.target.checked)} /> 清除已保存的密钥</label>}
-          <label className="field-label">图片模型<input className="text-input" value={settings.model} disabled={locked} onChange={(event) => setSettings({ ...settings, model: event.target.value })} placeholder="例如 gpt-image-2" /></label>
-          <label className="field-label">接口生成尺寸<input className="text-input" value={settings.size} disabled={locked} onChange={(event) => setSettings({ ...settings, size: event.target.value })} placeholder="留空使用渠道默认值" list="image-sizes" /><datalist id="image-sizes"><option value="1024x1024" /><option value="1024x576" /><option value="576x1024" /><option value="1024x768" /><option value="768x1024" /><option value="1K" /><option value="auto" /></datalist></label>
-          <label className="field-label">返回格式<select className="text-input" value={settings.responseFormat} disabled={locked} onChange={(event) => setSettings({ ...settings, responseFormat: event.target.value as ImageSettings['responseFormat'] })}><option value="auto">自动（不发送此参数）</option><option value="b64_json">Base64</option><option value="url">图片链接</option></select></label>
+          <label className="field-label image-field-full">接口协议<select id="image-protocol" className="text-input" value={settings.protocol} disabled={locked} onChange={(event) => { invalidateModels(); setSettings(switchImageProtocol(settings, event.target.value as ImageProtocol)); }}>{imageProtocols.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label className="field-label image-field-full">地址类型<select className="text-input" value={settings.addressMode} disabled={locked} onChange={(event) => updateConnection({ addressMode: event.target.value as ImageSettings['addressMode'] })}><option value="endpoint">完整请求地址（原样使用）</option><option value="base">Base URL（追加 {protocolPath(settings.protocol)}）</option></select></label>
+          <label className="field-label image-field-full">请求地址<input id="image-address" className="text-input" value={settings.address} disabled={locked} onChange={(event) => updateConnection({ address: event.target.value })} placeholder={`https://api.openai.com/v1${protocolPath(settings.protocol)}`} autoComplete="off" /></label>
+          <label className="field-label image-field-full">API 密钥<input className="text-input" type="password" value={apiKey} disabled={locked} onChange={(event) => { invalidateModels(); setApiKey(event.target.value); }} placeholder={settings.hasApiKey ? '已保存，留空保留；更换渠道请填写新密钥' : 'sk-…'} autoComplete="new-password" spellCheck={false} /></label>
+          {settings.hasApiKey && <label className="image-key-clear image-field-full"><input type="checkbox" checked={clearApiKey} disabled={locked} onChange={(event) => { invalidateModels(); setClearApiKey(event.target.checked); }} /> 清除已保存的密钥</label>}
+          <div className="image-field-full image-model-picker"><div className="image-model-heading"><label className="field-label" htmlFor="image-model">{settings.protocol === 'responses' ? '调用模型' : '图片模型'}</label><button className="text-button" disabled={locked || modelsLoading || !settings.address.trim()} onClick={() => void fetchModels()}>{modelsLoading ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}{modelsLoading ? '正在获取…' : '获取模型列表'}</button></div>
+            {manualModel ? <input id="image-model" className="text-input" value={settings.model} disabled={locked} onChange={(event) => setSettings({ ...settings, model: event.target.value })} placeholder="填写渠道提供的模型 ID" /> : <select id="image-model" className="text-input" value={settings.model} disabled={locked || modelsLoading} onChange={(event) => setSettings({ ...settings, model: event.target.value })}><option value="" disabled>请选择模型</option>{settings.model && !models.some((item) => item.id === settings.model) && <option value={settings.model}>{settings.model}{modelsLoaded ? '（当前配置，未在列表中）' : '（当前配置）'}</option>}{models.map((model) => <option key={model.id} value={model.id}>{model.id}{model.name && model.name !== model.id ? ` · ${model.name}` : ''}</option>)}</select>}
+            <div className="image-model-footer"><label><input type="checkbox" checked={manualModel} disabled={locked} onChange={(event) => setManualModel(event.target.checked)} /> 手动填写模型</label>{modelsLoaded && <span>{models.length ? `已获取 ${models.length} 个模型` : '渠道未返回可选模型'}</span>}</div>
+            {modelsError && <p className="inline-error" role="alert">{modelsError}</p>}
+          </div>
+          <label className="field-label image-field-full">图片比例／尺寸<select id="image-ratio" className="text-input" value={settings.aspectRatio} disabled={locked} onChange={(event) => setSettings({ ...settings, aspectRatio: event.target.value as ImageSettings['aspectRatio'] })}>{coverRatios.map((ratio) => <option key={ratio.id} value={ratio.id}>{ratio.id} · {ratio.label} · {ratio.width} × {ratio.height}</option>)}<option value="original">自动 · 使用渠道默认尺寸，保留原始比例</option></select></label>
+          {settings.protocol === 'images' && <label className="field-label">返回格式<select className="text-input" value={settings.responseFormat} disabled={locked} onChange={(event) => setSettings({ ...settings, responseFormat: event.target.value as ImageSettings['responseFormat'] })}><option value="auto">自动（不发送此参数）</option><option value="b64_json">Base64</option><option value="url">图片链接</option></select></label>}
           <label className="field-label">超时时间（秒）<input className="text-input" type="number" min="30" max="600" value={settings.timeoutSeconds} disabled={locked} onChange={(event) => setSettings({ ...settings, timeoutSeconds: Number(event.target.value) })} /></label>
+          <details className="image-field-full model-address-details"><summary>自定义模型列表地址</summary><label className="field-label">模型列表地址<input className="text-input" value={settings.modelsAddress} disabled={locked} placeholder="留空自动使用同一渠道的 /models" onChange={(event) => updateConnection({ modelsAddress: event.target.value })} /></label></details>
         </div>
-        <p className="field-help">Base URL 按填写的路径追加接口，不自动添加 /v1。模型与生成尺寸须由渠道支持；聊天模型不一定能用于文生图。</p>
-        <p className="field-help">接口尺寸与下方成图比例独立。默认请求 1024x1024；渠道支持时，可填入相同比例的尺寸，减少裁切。</p>
+        <p className="field-help">{settings.protocol === 'responses' ? 'Responses 直接调用原生 /responses，使用图像生成工具；请选择支持该工具的调用模型。' : settings.protocol === 'chat' ? 'Chat 直接调用 /chat/completions，需要渠道支持图片输出扩展。普通文本回复不会作为图片。' : 'Images 直接调用图片生成接口，请求画布按所选比例和模型适配。若渠道限制尺寸，可选“自动”。'}</p>
+        <p className="field-help">{settings.protocol === 'images' ? '返回图片会校正到所选比例／尺寸，不拉伸。' : settings.protocol === 'responses' ? '所选比例用于构图和最终尺寸；原生图像工具使用自动画布，必要时居中裁切。' : '所选比例通过 image_config.aspect_ratio 请求，渠道返回比例不同时居中裁切。'}模型列表不代表出图权限，实际支持情况以渠道为准。</p>
         <p className="field-help">密钥保存在本机服务端，不会回传到页面。文章内容会发送给所配置的图片服务。</p>
-        <button className="button button-secondary" disabled={locked || loadFailed} onClick={() => void save()}>{saving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} 保存接口配置</button>
+        <button className="button button-secondary" disabled={locked || modelsLoading || loadFailed || !settings.model.trim()} onClick={() => void save()}>{saving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} 保存接口配置</button>
       </details>
-      <div className="cover-ratio-heading"><span className="field-label">成图比例</span><button className="text-button" disabled={locked} aria-pressed={settings.aspectRatio === 'original'} onClick={() => setSettings({ ...settings, aspectRatio: 'original' })}>{settings.aspectRatio === 'original' ? '已选：保留原始比例' : '保留原始比例'}</button></div>
-      <div className="cover-ratios" role="radiogroup" aria-label="封面比例">{coverRatios.map((ratio) => <button key={ratio.id} type="button" role="radio" aria-checked={settings.aspectRatio === ratio.id} className={settings.aspectRatio === ratio.id ? 'selected' : ''} disabled={locked} onClick={() => setSettings({ ...settings, aspectRatio: ratio.id })}><span className="ratio-icon"><i style={{ width: `${Math.min(34, 24 * ratio.width / ratio.height)}px`, height: `${Math.min(24, 34 * ratio.height / ratio.width)}px` }} /></span><span><strong>{ratio.id} <small>{ratio.label}</small></strong><small>{ratio.width} × {ratio.height}</small></span></button>)}</div>
-      <p className="field-help">2.35:1 用于公众号列表和内容推荐。按所选比例构图；返回比例不同时居中裁切，不拉伸。下载 PNG 后，可在公众号后台选择为列表封面。</p>
+      <p className="field-help">{imageProtocols.find((item) => item.id === settings.protocol)?.label} · {settings.model} · {settings.aspectRatio === 'original' ? '自动尺寸' : settings.aspectRatio}。可展开接口配置修改。</p>
       <label className="field-label" htmlFor="cover-style">画面要求</label>
       <textarea id="cover-style" className="image-style-input" value={style} maxLength={2000} disabled={locked} onChange={(event) => setStyle(event.target.value)} />
       <p className="field-help">文章：{articlePath}。自动结合标题、摘要和正文；每次生成一张。</p>

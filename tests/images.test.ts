@@ -55,7 +55,7 @@ describe('image configuration', () => {
   it('clears credentials and rejects invalid transport and configuration values', async () => {
     await request(instance.app).put('/api/image-settings').send(config).expect(200);
     expect((await request(instance.app).put('/api/image-settings').send({ ...config, clearApiKey: true }).expect(200)).body.hasApiKey).toBe(false);
-    for (const invalid of [{ address: 'file:///etc/passwd' }, { address: 'https://user:password@images.example/v1' }, { apiKey: 'bad\r\nheader' }, { timeoutSeconds: 0 }, { model: '' }, { size: 'huge' }, { aspectRatio: '2:0' }]) {
+    for (const invalid of [{ address: 'file:///etc/passwd' }, { address: 'https://user:password@images.example/v1' }, { apiKey: 'bad\r\nheader' }, { timeoutSeconds: 0 }, { model: '' }, { protocol: 'other' }, { aspectRatio: '2:0' }]) {
       await request(instance.app).put('/api/image-settings').send({ ...config, ...invalid }).expect(400);
     }
   });
@@ -68,10 +68,100 @@ describe('image configuration', () => {
     expect(result.body.aspectRatio).toBe('original');
     expect(result.body.hasApiKey).toBe(true);
   });
+  it('migrates the old separate size setting to one ratio and defaults the protocol to Images', async () => {
+    const { protocol: _protocol, modelsAddress: _models, ...legacy } = config;
+    await fs.writeFile(path.join(temporary, 'state/image-settings.json'), JSON.stringify({ ...legacy, size: '1024x1024', aspectRatio: '16:9' }));
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    const result = await request(instance.app).get('/api/image-settings').expect(200);
+    expect(result.body).toMatchObject({ protocol: 'images', aspectRatio: '16:9', hasApiKey: true });
+    expect(result.body).not.toHaveProperty('size');
+    await request(instance.app).put('/api/image-settings').send(result.body).expect(200);
+    expect(JSON.parse(await fs.readFile(path.join(temporary, 'state/image-settings.json'), 'utf8'))).not.toHaveProperty('size');
+  });
+});
+
+describe('provider model discovery', () => {
+  beforeEach(async () => { await request(instance.app).put('/api/image-settings').send(config).expect(200); });
+  it('uses GET models with the saved key, removes duplicates and exposes no provider secrets', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ id: 'gpt-image-2', display_name: 'Image 2', secret: config.apiKey }, { id: 'gpt-5.6-sol' }, { id: 'gpt-image-2' }, { id: config.apiKey }, { id: 1 }, {}] }));
+    vi.stubGlobal('fetch', fetcher);
+    const response = await request(instance.app).get('/api/images/models').expect(200);
+    expect(response.body.models.map((model: { id: string }) => model.id)).toEqual(['gpt-5.6-sol', 'gpt-image-2']);
+    expect(response.text).not.toContain(config.apiKey);
+    expect(fetcher.mock.calls[0][0]).toBe('https://images.example/v1/models');
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'GET', redirect: 'error', headers: { Authorization: `Bearer ${config.apiKey}` } });
+  });
+  it('fetches unsaved connection settings without persisting or replacing the selected model', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ id: 'custom-image' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    await request(instance.app).post('/api/images/models').send({ ...config, address: 'https://new.example/custom/responses', addressMode: 'endpoint', protocol: 'responses', model: '', apiKey: 'new-test-key' }).expect(200);
+    expect(fetcher.mock.calls[0][0]).toBe('https://new.example/custom/models');
+    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer new-test-key');
+    expect((await request(instance.app).get('/api/image-settings')).body).toMatchObject({ address: config.address, model: config.model, protocol: 'images' });
+  });
+  it('supports a custom same-origin models address and never sends a saved key to a different provider', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [] }));
+    vi.stubGlobal('fetch', fetcher);
+    await request(instance.app).post('/api/images/models').send({ ...config, address: 'https://new.example/v1', apiKey: '' }).expect(400);
+    await request(instance.app).post('/api/images/models').send({ ...config, modelsAddress: 'https://other.example/models' }).expect(400);
+    expect(fetcher).not.toHaveBeenCalled();
+    const response = await request(instance.app).post('/api/images/models').send({ ...config, modelsAddress: 'https://images.example/catalog?version=1' }).expect(200);
+    expect(response.body.models).toEqual([]);
+    expect(fetcher.mock.calls[0][0]).toBe('https://images.example/catalog?version=1');
+  });
+  it('reports unsupported model lists without following redirects or leaking upstream error bodies', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(config.apiKey, { status: 302, headers: { Location: 'https://other.example/models' } }))
+      .mockResolvedValueOnce(Response.json({ models: [] })).mockResolvedValueOnce(new Response('<html>login</html>'));
+    vi.stubGlobal('fetch', fetcher);
+    const failed = await request(instance.app).get('/api/images/models').expect(502);
+    expect(failed.text).not.toContain(config.apiKey);
+    expect(failed.body.message).toContain('HTTP 302');
+    expect((await request(instance.app).get('/api/images/models').expect(502)).body.code).toBe('MODELS_RESPONSE_INVALID');
+    await request(instance.app).get('/api/images/models').expect(502);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('cover generation', () => {
   beforeEach(async () => { await request(instance.app).put('/api/image-settings').send(config).expect(200); });
+  it('calls Responses natively and extracts the image-generation tool result without converting through Chat', async () => {
+    await request(instance.app).put('/api/image-settings').send({ ...config, protocol: 'responses', model: 'gpt-5.6-sol' }).expect(200);
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ status: 'completed', output: [{ type: 'image_generation_call', result: webp.toString('base64') }] }));
+    vi.stubGlobal('fetch', fetcher);
+    const response = await request(instance.app).post('/api/images/generate').send(generate()).expect(200);
+    expect(response.body.width).toBe(16);
+    expect(fetcher.mock.calls[0][0]).toBe('https://images.example/v1/responses');
+    const body = JSON.parse(fetcher.mock.calls[0][1].body);
+    expect(body).toMatchObject({ model: 'gpt-5.6-sol', tools: [{ type: 'image_generation' }], tool_choice: { type: 'image_generation' }, stream: false });
+    expect(body.input).toContain('没有保存的最新内容');
+    expect(body).not.toHaveProperty('messages');
+    expect(body).not.toHaveProperty('prompt');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('calls Chat Completions directly and decodes inline image data from message.images', async () => {
+    await request(instance.app).put('/api/image-settings').send({ ...config, protocol: 'chat', aspectRatio: '16:9' }).expect(200);
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ choices: [{ message: { role: 'assistant', images: [{ type: 'image_url', image_url: { url: `data:image/webp;base64,${webp.toString('base64')}` } }] } }] }));
+    vi.stubGlobal('fetch', fetcher);
+    const result = await request(instance.app).post('/api/images/generate').send(generate()).expect(200);
+    expect(result.body).toMatchObject({ width: 1024, height: 576 });
+    expect(fetcher.mock.calls[0][0]).toBe('https://images.example/v1/chat/completions');
+    const body = JSON.parse(fetcher.mock.calls[0][1].body);
+    expect(body).toMatchObject({ modalities: ['text', 'image'], messages: [{ role: 'user' }], image_config: { aspect_ratio: '16:9' } });
+    expect(body).not.toHaveProperty('input');
+    expect(body).not.toHaveProperty('tools');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('rejects text-only Chat results and never falls back to a different protocol on errors', async () => {
+    await request(instance.app).put('/api/image-settings').send({ ...config, protocol: 'chat' }).expect(200);
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ choices: [{ message: { content: 'I can describe an image. See https://example.com.' } }] }))
+      .mockResolvedValueOnce(new Response('unsupported', { status: 400 }));
+    vi.stubGlobal('fetch', fetcher);
+    expect((await request(instance.app).post('/api/images/generate').send(generate()).expect(502)).body.code).toBe('IMAGE_RESPONSE_MISSING');
+    await request(instance.app).put('/api/image-settings').send({ ...config, protocol: 'responses' }).expect(200);
+    await request(instance.app).post('/api/images/generate').send(generate()).expect(502);
+    expect(fetcher.mock.calls.map((call) => call[0])).toEqual(['https://images.example/v1/chat/completions', 'https://images.example/v1/responses']);
+  });
   it('uses the current draft, downloads a temporary URL, converts WebP bytes to PNG, and saves beside a nested article', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ data: [{ url: 'https://cdn.example/image.webp' }] })).mockResolvedValueOnce(new Response(webp, { headers: { 'Content-Type': 'image/webp' } }));
     vi.stubGlobal('fetch', fetcher);
@@ -80,7 +170,8 @@ describe('cover generation', () => {
     const [endpoint, options] = fetcher.mock.calls[0];
     expect(endpoint).toBe('https://images.example/v1/images/generations');
     expect(options.headers['X-Request-Id']).toBe(body.requestId);
-    expect(JSON.parse(options.body)).toMatchObject({ model: config.model, size: '1024x1024', n: 1 });
+    expect(JSON.parse(options.body)).toMatchObject({ model: config.model, n: 1 });
+    expect(JSON.parse(options.body)).not.toHaveProperty('size');
     expect(JSON.parse(options.body).prompt).toContain('没有保存的最新内容');
     expect(JSON.parse(options.body)).not.toHaveProperty('response_format');
     expect(fetcher.mock.calls[1][1].headers).not.toHaveProperty('Authorization');
@@ -93,7 +184,7 @@ describe('cover generation', () => {
     expect(downloaded.headers['content-disposition']).toContain('attachment');
   });
   it('handles base64 responses and returns a cached result across a service restart', async () => {
-    await request(instance.app).put('/api/image-settings').send({ ...config, size: '', responseFormat: 'b64_json' }).expect(200);
+    await request(instance.app).put('/api/image-settings').send({ ...config, responseFormat: 'b64_json' }).expect(200);
     const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ b64_json: webp.toString('base64') }] }));
     vi.stubGlobal('fetch', fetcher);
     const body = generate();
@@ -108,7 +199,7 @@ describe('cover generation', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     await request(instance.app).post('/api/images/generate').send({ ...body, content: 'different' }).expect(409);
   });
-  it('uses gpt-image-2 with the chosen composition and persists a 2.35:1 cover independently of the upstream size', async () => {
+  it('uses the unified ratio for both Images API size and the final 2.35:1 cover', async () => {
     await request(instance.app).put('/api/image-settings').send({ ...config, model: 'gpt-image-2', aspectRatio: '2.35:1' }).expect(200);
     const input = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: '#aaccbb' } }).png().toBuffer();
     const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ b64_json: input.toString('base64') }] }));
@@ -117,7 +208,7 @@ describe('cover generation', () => {
     const response = await request(instance.app).post('/api/images/generate').send(body).expect(200);
     expect(response.body).toMatchObject({ width: 940, height: 400, aspectRatio: '2.35:1' });
     const payload = JSON.parse(fetcher.mock.calls[0][1].body);
-    expect(payload).toMatchObject({ model: 'gpt-image-2', size: '1024x1024' });
+    expect(payload).toMatchObject({ model: 'gpt-image-2', size: '1280x544' });
     expect(payload.prompt).toContain('2.35:1');
     expect(payload.prompt).toContain('公众号列表和内容推荐');
     expect(await sharp(await fs.readFile(path.join(articles, response.body.assetPath))).metadata()).toMatchObject({ width: 940, height: 400, format: 'png' });

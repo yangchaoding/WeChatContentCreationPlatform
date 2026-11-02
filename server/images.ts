@@ -2,12 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { coverPrompt, coverRatios, defaultImageSettings, type CoverRatio, type GeneratedCover, type ImageSettings } from '../shared/images';
+import { coverPrompt, coverRatios, defaultImageSettings, imageProtocols, type CoverRatio, type GeneratedCover, type ImageModelList, type ImageProtocol, type ImageSettings } from '../shared/images';
 import { AppError, type WorkspaceService } from './workspace';
+import { configuredEndpoint, inferredModelsAddress, protocolImage, protocolRequest, type ImageSource } from './image-protocols';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 type PrivateSettings = Omit<ImageSettings, 'hasApiKey'> & { apiKey: string };
-type ImageSource = { url?: string; b64_json?: string };
 type GenerationStage = 'prepare' | 'request' | 'response' | 'download' | 'convert' | 'save';
 interface Job { fingerprint: string; source?: ImageSource; result?: GeneratedCover; lastError?: { stage: GenerationStage; code: string; message: string; at: string } }
 
@@ -20,10 +20,9 @@ function webUrl(value: string): URL {
   return url;
 }
 
-export function imageEndpoint(settings: Pick<ImageSettings, 'address' | 'addressMode'>): string {
-  const url = webUrl(settings.address);
-  if (settings.addressMode === 'base') url.pathname = `${url.pathname.replace(/\/+$/, '')}/images/generations`;
-  return url.href;
+export function imageEndpoint(settings: Pick<ImageSettings, 'address' | 'addressMode'> & Partial<Pick<ImageSettings, 'protocol'>>): string {
+  webUrl(settings.address);
+  return configuredEndpoint(settings);
 }
 
 async function atomicJson(filename: string, value: unknown) {
@@ -92,7 +91,7 @@ export class ImageService {
     return { ...settings, hasApiKey: Boolean(apiKey) };
   }
 
-  private validate(input: unknown, previous: PrivateSettings): PrivateSettings {
+  private validate(input: unknown, previous: PrivateSettings, allowEmptyModel = false): PrivateSettings {
     if (!input || typeof input !== 'object') throw new AppError(400, '图片配置无效。');
     const value = input as Record<string, unknown>;
     const field = (key: string, max: number) => {
@@ -102,18 +101,20 @@ export class ImageService {
     const address = field('address', 2048);
     const addressMode = value.addressMode;
     const model = field('model', 200);
-    const size = field('size', 40);
+    const protocol = value.protocol ?? 'images';
+    if (!imageProtocols.some((item) => item.id === protocol)) throw new AppError(400, '请选择 Images、Responses 或 Chat 协议。');
+    const modelsAddress = value.modelsAddress === undefined ? '' : field('modelsAddress', 2048);
     // Existing configurations keep the uncropped behavior until a ratio is selected.
     const aspectRatio = value.aspectRatio ?? 'original';
     if (aspectRatio !== 'original' && !coverRatios.some((ratio) => ratio.id === aspectRatio)) throw new AppError(400, '请选择支持的封面比例。');
     const responseFormat = value.responseFormat;
     const timeoutSeconds = value.timeoutSeconds;
-    if (!['endpoint', 'base'].includes(String(addressMode)) || !['auto', 'url', 'b64_json'].includes(String(responseFormat)) || !model || !Number.isInteger(timeoutSeconds) || Number(timeoutSeconds) < 30 || Number(timeoutSeconds) > 600) throw new AppError(400, '请检查地址类型、模型、返回格式和超时时间（30–600 秒）。');
-    if (size && !/^(auto|[124]K|\d{2,4}x\d{2,4})$/i.test(size)) throw new AppError(400, '尺寸请填写 auto、1K、1024x1024 等渠道支持的格式，或留空。');
+    if (!['endpoint', 'base'].includes(String(addressMode)) || !['auto', 'url', 'b64_json'].includes(String(responseFormat)) || (!model && !allowEmptyModel) || !Number.isInteger(timeoutSeconds) || Number(timeoutSeconds) < 30 || Number(timeoutSeconds) > 600) throw new AppError(400, '请检查地址类型、模型、返回格式和超时时间（30–600 秒）。');
     const origin = webUrl(address).origin;
+    if (modelsAddress && webUrl(modelsAddress).origin !== origin) throw new AppError(400, '模型列表地址必须与生成接口属于同一来源，避免把密钥发送给其他渠道。');
     const supplied = value.apiKey === undefined ? '' : field('apiKey', 4096);
     const apiKey = value.clearApiKey === true ? '' : supplied || (origin === webUrl(previous.address).origin ? previous.apiKey : '');
-    return { address, addressMode: addressMode as ImageSettings['addressMode'], model, size, aspectRatio: aspectRatio as CoverRatio, responseFormat: responseFormat as ImageSettings['responseFormat'], timeoutSeconds: Number(timeoutSeconds), apiKey };
+    return { address, addressMode: addressMode as ImageSettings['addressMode'], protocol: protocol as ImageProtocol, modelsAddress, model, aspectRatio: aspectRatio as CoverRatio, responseFormat: responseFormat as ImageSettings['responseFormat'], timeoutSeconds: Number(timeoutSeconds), apiKey };
   }
 
   async saveSettings(value: unknown) {
@@ -125,6 +126,39 @@ export class ImageService {
     this.settingsQueue = next.catch(() => {});
     await next;
     return this.publicSettings;
+  }
+
+  async listModels(input?: unknown): Promise<ImageModelList> {
+    if (input !== undefined && (!input || typeof input !== 'object' || Array.isArray(input))) throw new AppError(400, '接口配置无效。');
+    const settings = input === undefined ? this.settings : this.validate({ ...this.publicSettings, ...input as object }, this.settings, true);
+    if (!settings.apiKey) throw new AppError(400, '请先填写 API 密钥。切换渠道时需要填写该渠道的密钥。');
+    const endpoint = inferredModelsAddress(settings);
+    webUrl(endpoint);
+    const signal = AbortSignal.timeout(Math.min(settings.timeoutSeconds, 30) * 1000);
+    try {
+      const response = await fetch(endpoint, { method: 'GET', signal, redirect: 'error', headers: { Authorization: `Bearer ${settings.apiKey}`, Accept: 'application/json' } });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new AppError(502, `获取模型列表失败（HTTP ${response.status}）。请检查密钥、模型列表地址，或手动填写模型。`, 'MODELS_PROVIDER_ERROR');
+      }
+      const body = await boundedBody(response, 2 * 1024 * 1024);
+      let payload: { data?: unknown[] };
+      try { payload = JSON.parse(body.toString('utf8')); }
+      catch { throw new AppError(502, '模型列表不是有效 JSON，请检查模型列表地址。', 'MODELS_RESPONSE_INVALID'); }
+      if (!Array.isArray(payload?.data)) throw new AppError(502, '模型列表缺少 data 数组，可手动填写模型或修改模型列表地址。', 'MODELS_RESPONSE_INVALID');
+      const models = new Map<string, { id: string; name?: string }>();
+      for (const entry of payload.data.slice(0, 5000)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const { id, name, display_name } = entry as Record<string, unknown>;
+        if (typeof id !== 'string' || !id.trim() || id.length > 200 || /[\r\n\0]/.test(id) || id.includes(settings.apiKey)) continue;
+        const label = typeof display_name === 'string' ? display_name : typeof name === 'string' ? name : undefined;
+        models.set(id, { id, ...(label ? { name: label.replaceAll(settings.apiKey, '[密钥已隐藏]').slice(0, 200) } : {}) });
+      }
+      return { models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(signal.aborted ? 504 : 502, signal.aborted ? '获取模型列表超时，请稍后重试或手动填写模型。' : '无法连接模型列表接口，请检查地址和网络，或手动填写模型。', 'MODELS_REQUEST_FAILED');
+    }
   }
 
   async generate(input: { requestId: string; directory: string; articlePath: string; content: string; style: string }): Promise<GeneratedCover> {
@@ -168,7 +202,7 @@ export class ImageService {
         const response = await fetch(endpoint, {
           method: 'POST', redirect: 'error', signal,
           headers: { Authorization: `Bearer ${settings.apiKey}`, 'Content-Type': 'application/json', 'X-Request-Id': input.requestId },
-          body: JSON.stringify({ model: settings.model, prompt: coverPrompt(input.content, input.articlePath, input.style, settings.aspectRatio), n: 1, ...(settings.size ? { size: settings.size } : {}), ...(settings.responseFormat !== 'auto' ? { response_format: settings.responseFormat } : {}) }),
+          body: JSON.stringify(protocolRequest(settings, coverPrompt(input.content, input.articlePath, input.style, settings.aspectRatio))),
         });
         if (!response.ok) {
           let upstream = '';
@@ -182,14 +216,11 @@ export class ImageService {
           throw new AppError(502, `图片服务返回 HTTP ${response.status}。${detail}${upstream ? ` 渠道提示：${upstream}` : ''}`, 'IMAGE_PROVIDER_ERROR');
         }
         stage = 'response';
-        let payload: { data?: ImageSource[] };
+        let payload: unknown;
         const body = await boundedBody(response, 30 * 1024 * 1024);
         try { payload = JSON.parse(body.toString('utf8')); }
         catch { throw new AppError(502, '图片服务没有返回有效的 JSON。', 'IMAGE_RESPONSE_INVALID'); }
-        const source = payload?.data?.[0];
-        if (typeof source?.b64_json === 'string' && source.b64_json) job.source = { b64_json: source.b64_json };
-        else if (typeof source?.url === 'string' && source.url) job.source = { url: source.url };
-        else throw new AppError(502, '响应中没有 data[0].url 或 data[0].b64_json 图片数据。');
+        job.source = protocolImage(payload, settings);
         // Persist the upstream result before downloading: a retry resumes this step without generating again.
         stage = 'save';
         await atomicJson(filename, job);

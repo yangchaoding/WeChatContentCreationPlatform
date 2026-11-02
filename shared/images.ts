@@ -9,12 +9,50 @@ export const coverRatios = [
   { id: '3:4', label: '竖版', width: 768, height: 1024 },
 ] as const;
 export type CoverRatio = typeof coverRatios[number]['id'] | 'original';
+export type ImageProtocol = 'images' | 'responses' | 'chat';
+export const imageProtocols: { id: ImageProtocol; label: string; path: string }[] = [
+  { id: 'images', label: 'Images · 图片生成接口', path: '/images/generations' },
+  { id: 'responses', label: 'Responses · 原生直连', path: '/responses' },
+  { id: 'chat', label: 'Chat · Chat Completions', path: '/chat/completions' },
+];
+
+export function protocolPath(protocol: ImageProtocol) { return imageProtocols.find((item) => item.id === protocol)!.path; }
+
+export function switchImageProtocol(settings: ImageSettings, protocol: ImageProtocol): ImageSettings {
+  let address = settings.address;
+  if (settings.addressMode === 'endpoint') {
+    try {
+      const url = new URL(address);
+      if (/\/(images\/generations|responses|chat\/completions)\/?$/.test(url.pathname)) {
+        url.pathname = url.pathname.replace(/\/(images\/generations|responses|chat\/completions)\/?$/, protocolPath(protocol));
+        address = url.href;
+      }
+    } catch { /* Keep an incomplete address editable. */ }
+  }
+  return { ...settings, address, protocol };
+}
+
+export function imageRequestSize(ratio: CoverRatio, model: string): string | undefined {
+  const preset = coverRatios.find((item) => item.id === ratio);
+  if (!preset) return;
+  // GPT Image 2 needs multiples of 16 and at least 655,360 pixels.
+  // Keep export dimensions independent of the model's supported request canvas.
+  if (/^gpt-image-2(?:$|-\d{4}-|\.)/.test(model)) {
+    return ({ '2.35:1': '1280x544', '1:1': '1024x1024', '16:9': '1280x720', '9:16': '720x1280', '4:3': '1024x768', '3:4': '768x1024' })[preset.id];
+  }
+  if (/^gpt-image-1(?:$|[.-])/.test(model)) return preset.width > preset.height ? '1536x1024' : preset.width < preset.height ? '1024x1536' : '1024x1024';
+  return `${preset.width}x${preset.height}`;
+}
+
+export interface ImageModel { id: string; name?: string }
+export interface ImageModelList { models: ImageModel[] }
 
 export interface ImageSettings {
   address: string;
   addressMode: 'endpoint' | 'base';
+  protocol: ImageProtocol;
+  modelsAddress: string;
   model: string;
-  size: string;
   aspectRatio: CoverRatio;
   responseFormat: 'auto' | 'url' | 'b64_json';
   timeoutSeconds: number;
@@ -24,8 +62,9 @@ export interface ImageSettings {
 export const defaultImageSettings: ImageSettings = {
   address: 'https://l0veyou.com/images/generations',
   addressMode: 'endpoint',
+  protocol: 'images',
+  modelsAddress: '',
   model: 'gpt-image-2',
-  size: '1024x1024',
   aspectRatio: '2.35:1',
   responseFormat: 'auto',
   timeoutSeconds: 180,

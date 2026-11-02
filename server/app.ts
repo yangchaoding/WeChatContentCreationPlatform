@@ -150,6 +150,8 @@ export async function createLocalApp(options: { storageDirectory: string; initia
   }));
   app.get('/api/image-settings', (_req, res) => res.json(images.publicSettings));
   app.put('/api/image-settings', asyncRoute(async (req, res) => res.json(await images.saveSettings(req.body))));
+  app.get('/api/images/models', asyncRoute(async (_req, res) => res.json(await images.listModels())));
+  app.post('/api/images/models', asyncRoute(async (req, res) => res.json(await images.listModels(req.body))));
   app.post('/api/images/generate', asyncRoute(async (req, res) => {
     checkScope(req);
     res.json(await images.generate({

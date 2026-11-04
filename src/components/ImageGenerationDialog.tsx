@@ -3,7 +3,7 @@ import { Check, Copy, Download, LoaderCircle, RefreshCw, Settings2, Sparkles } f
 import Modal from './Modal';
 import { api, errorMessage, query } from '../lib/api';
 import { copyImage } from '../lib/render';
-import { coverRatios, defaultCoverStyle, defaultImageSettings, imageProtocols, protocolPath, switchImageProtocol, type GeneratedCover, type ImageModel, type ImageModelList, type ImageProtocol, type ImageSettings } from '../../shared/images';
+import { coverRatios, defaultCoverStyle, defaultImageSettings, imageProtocols, imageAddressMode, protocolPath, switchImageProtocol, type GeneratedCover, type ImageModel, type ImageModelList, type ImageProtocol, type ImageSettings } from '../../shared/images';
 
 export default function ImageGenerationDialog({ directory, articlePath, content, onInsert, onClose }: {
   directory: string;
@@ -41,7 +41,7 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
     let active = true;
     void api<ImageSettings>('/image-settings').then((value) => {
       if (!active) return;
-      setSettings(value);
+      setSettings({ ...value, addressMode: imageAddressMode(value.address, value.addressMode) });
       setConfigOpen(!value.hasApiKey);
     }).catch((failure) => { if (active) { setError(errorMessage(failure)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; modelsRequest.current++; modelsController.current?.abort(); };
@@ -54,7 +54,10 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
   };
   const updateConnection = (patch: Partial<ImageSettings>) => {
     invalidateModels();
-    setSettings((value) => ({ ...value, ...patch }));
+    setSettings((value) => {
+      const next = { ...value, ...patch };
+      return { ...next, addressMode: imageAddressMode(next.address, next.addressMode) };
+    });
   };
   const fetchModels = async () => {
     if (modelsLoading || locked) return;
@@ -143,8 +146,8 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
         <summary><Settings2 size={15} /> 接口配置 <span>{settings.hasApiKey ? '已保存密钥' : '尚未配置密钥'}</span></summary>
         <div className="image-settings-grid">
           <label className="field-label image-field-full">接口协议<select id="image-protocol" className="text-input" value={settings.protocol} disabled={locked} onChange={(event) => { invalidateModels(); setSettings(switchImageProtocol(settings, event.target.value as ImageProtocol)); }}>{imageProtocols.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-          <label className="field-label image-field-full">地址类型<select className="text-input" value={settings.addressMode} disabled={locked} onChange={(event) => updateConnection({ addressMode: event.target.value as ImageSettings['addressMode'] })}><option value="endpoint">完整请求地址（原样使用）</option><option value="base">Base URL（追加 {protocolPath(settings.protocol)}）</option></select></label>
-          <label className="field-label image-field-full">请求地址<input id="image-address" className="text-input" value={settings.address} disabled={locked} onChange={(event) => updateConnection({ address: event.target.value })} placeholder={`https://api.openai.com/v1${protocolPath(settings.protocol)}`} autoComplete="off" /></label>
+          <label className="field-label image-field-full">地址类型<select id="image-address-mode" className="text-input" value={settings.addressMode} disabled={locked} onChange={(event) => updateConnection({ addressMode: event.target.value as ImageSettings['addressMode'] })}><option value="endpoint">完整请求地址（原样使用）</option><option value="base">Base URL（追加 {protocolPath(settings.protocol)}）</option></select></label>
+          <label className="field-label image-field-full">请求地址<input id="image-address" className="text-input" value={settings.address} disabled={locked} onChange={(event) => updateConnection({ address: event.target.value })} placeholder={`https://api.openai.com/v1${protocolPath(settings.protocol)}`} autoComplete="off" /><span className="field-help">自动识别 /v1 等基础地址和 /responses 等完整接口地址；自定义路径可选择地址类型。</span></label>
           <label className="field-label image-field-full">API 密钥<input className="text-input" type="password" value={apiKey} disabled={locked} onChange={(event) => { invalidateModels(); setApiKey(event.target.value); }} placeholder={settings.hasApiKey ? '已保存，留空保留；更换渠道请填写新密钥' : 'sk-…'} autoComplete="new-password" spellCheck={false} /></label>
           {settings.hasApiKey && <label className="image-key-clear image-field-full"><input type="checkbox" checked={clearApiKey} disabled={locked} onChange={(event) => { invalidateModels(); setClearApiKey(event.target.checked); }} /> 清除已保存的密钥</label>}
           <div className="image-field-full image-model-picker"><div className="image-model-heading"><label className="field-label" htmlFor="image-model">{settings.protocol === 'responses' ? '调用模型' : '图片模型'}</label><button className="text-button" disabled={locked || modelsLoading || !settings.address.trim()} onClick={() => void fetchModels()}>{modelsLoading ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}{modelsLoading ? '正在获取…' : '获取模型列表'}</button></div>

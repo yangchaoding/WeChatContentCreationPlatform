@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { coverPrompt, coverRatios, defaultImageSettings, imageProtocols, type CoverRatio, type GeneratedCover, type ImageModelList, type ImageProtocol, type ImageSettings } from '../shared/images';
+import { coverPrompt, coverRatios, defaultImageSettings, imageProtocols, imageAddressMode, type CoverRatio, type GeneratedCover, type ImageModelList, type ImageProtocol, type ImageSettings } from '../shared/images';
 import { AppError, type WorkspaceService } from './workspace';
 import { configuredEndpoint, inferredModelsAddress, protocolImage, protocolRequest, type ImageSource } from './image-protocols';
 
@@ -114,7 +114,7 @@ export class ImageService {
     if (modelsAddress && webUrl(modelsAddress).origin !== origin) throw new AppError(400, '模型列表地址必须与生成接口属于同一来源，避免把密钥发送给其他渠道。');
     const supplied = value.apiKey === undefined ? '' : field('apiKey', 4096);
     const apiKey = value.clearApiKey === true ? '' : supplied || (origin === webUrl(previous.address).origin ? previous.apiKey : '');
-    return { address, addressMode: addressMode as ImageSettings['addressMode'], protocol: protocol as ImageProtocol, modelsAddress, model, aspectRatio: aspectRatio as CoverRatio, responseFormat: responseFormat as ImageSettings['responseFormat'], timeoutSeconds: Number(timeoutSeconds), apiKey };
+    return { address, addressMode: imageAddressMode(address, addressMode as ImageSettings['addressMode']), protocol: protocol as ImageProtocol, modelsAddress, model, aspectRatio: aspectRatio as CoverRatio, responseFormat: responseFormat as ImageSettings['responseFormat'], timeoutSeconds: Number(timeoutSeconds), apiKey };
   }
 
   async saveSettings(value: unknown) {

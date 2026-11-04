@@ -79,6 +79,18 @@ describe('image configuration', () => {
     await request(instance.app).put('/api/image-settings').send(result.body).expect(200);
     expect(JSON.parse(await fs.readFile(path.join(temporary, 'state/image-settings.json'), 'utf8'))).not.toHaveProperty('size');
   });
+  it('recognizes a saved versioned base address without losing its key or protocol', async () => {
+    await fs.writeFile(path.join(temporary, 'state/image-settings.json'), JSON.stringify({ ...config, addressMode: 'endpoint', protocol: 'responses' }));
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    const result = await request(instance.app).get('/api/image-settings').expect(200);
+    expect(result.body).toMatchObject({ address: config.address, addressMode: 'base', protocol: 'responses', hasApiKey: true });
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ id: 'example-model' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    await request(instance.app).get('/api/images/models').expect(200);
+    expect(fetcher.mock.calls[0][0]).toBe('https://images.example/v1/models');
+    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${config.apiKey}`);
+  });
 });
 
 describe('provider model discovery', () => {
@@ -99,6 +111,16 @@ describe('provider model discovery', () => {
     expect(fetcher.mock.calls[0][0]).toBe('https://new.example/custom/models');
     expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer new-test-key');
     expect((await request(instance.app).get('/api/image-settings')).body).toMatchObject({ address: config.address, model: config.model, protocol: 'images' });
+  });
+  it('fetches models from a pasted /v1 address despite an outdated endpoint mode', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [{ id: 'example-model' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    const response = await request(instance.app).post('/api/images/models').send({ ...config, address: 'https://new.example/v1', addressMode: 'endpoint', protocol: 'responses', apiKey: 'new-test-key' }).expect(200);
+    expect(response.body.models).toEqual([{ id: 'example-model' }]);
+    expect(fetcher.mock.calls[0][0]).toBe('https://new.example/v1/models');
+    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer new-test-key');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect((await request(instance.app).get('/api/image-settings')).body.address).toBe(config.address);
   });
   it('supports a custom same-origin models address and never sends a saved key to a different provider', async () => {
     const fetcher = vi.fn().mockResolvedValue(Response.json({ data: [] }));
@@ -126,7 +148,8 @@ describe('provider model discovery', () => {
 describe('cover generation', () => {
   beforeEach(async () => { await request(instance.app).put('/api/image-settings').send(config).expect(200); });
   it('calls Responses natively and extracts the image-generation tool result without converting through Chat', async () => {
-    await request(instance.app).put('/api/image-settings').send({ ...config, protocol: 'responses', model: 'gpt-5.6-sol' }).expect(200);
+    const saved = await request(instance.app).put('/api/image-settings').send({ ...config, addressMode: 'endpoint', protocol: 'responses', model: 'gpt-5.6-sol' }).expect(200);
+    expect(saved.body.addressMode).toBe('base');
     const fetcher = vi.fn().mockResolvedValue(Response.json({ status: 'completed', output: [{ type: 'image_generation_call', result: webp.toString('base64') }] }));
     vi.stubGlobal('fetch', fetcher);
     const response = await request(instance.app).post('/api/images/generate').send(generate()).expect(200);

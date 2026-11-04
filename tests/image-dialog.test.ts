@@ -49,6 +49,23 @@ describe('image configuration dialog', () => {
     expect(document.querySelector('#image-model')?.textContent).not.toContain('stale-model');
     expect((document.getElementById('image-model') as HTMLSelectElement).value).toBe('gpt-image-2');
   });
+  it('recognizes pasted base and complete URLs before fetching models', async () => {
+    const pasteAddress = async (value: string) => run(() => {
+      const input = document.getElementById('image-address') as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await select('image-protocol', 'responses');
+    await pasteAddress('https://new.example/v1');
+    expect((document.getElementById('image-address-mode') as HTMLSelectElement).value).toBe('base');
+    await run(() => button('获取模型列表').click());
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/images/models')!;
+    expect(JSON.parse(String(request[1]?.body))).toMatchObject({ address: 'https://new.example/v1', addressMode: 'base', protocol: 'responses' });
+    await pasteAddress('https://new.example/v1/responses');
+    expect((document.getElementById('image-address-mode') as HTMLSelectElement).value).toBe('endpoint');
+    await select('image-protocol', 'chat');
+    expect((document.getElementById('image-address') as HTMLInputElement).value).toBe('https://new.example/v1/chat/completions');
+  });
   it('keeps the configured model and offers manual entry after a list error', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(Response.json({ message: '模型列表不可用' }, { status: 502 }));
     await run(() => button('获取模型列表').click());

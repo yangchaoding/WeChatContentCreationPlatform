@@ -18,9 +18,19 @@ export const imageProtocols: { id: ImageProtocol; label: string; path: string }[
 
 export function protocolPath(protocol: ImageProtocol) { return imageProtocols.find((item) => item.id === protocol)!.path; }
 
+export function imageAddressMode(address: string, fallback: ImageSettings['addressMode']): ImageSettings['addressMode'] {
+  try {
+    const pathname = new URL(address).pathname.replace(/\/+$/, '');
+    if (/\/(images\/generations|responses|chat\/completions)$/.test(pathname)) return 'endpoint';
+    if (!pathname || /\/v\d+(?:\.\d+)?$/i.test(pathname)) return 'base';
+  } catch { /* Keep an incomplete address editable. */ }
+  return fallback;
+}
+
 export function switchImageProtocol(settings: ImageSettings, protocol: ImageProtocol): ImageSettings {
   let address = settings.address;
-  if (settings.addressMode === 'endpoint') {
+  const addressMode = imageAddressMode(address, settings.addressMode);
+  if (addressMode === 'endpoint') {
     try {
       const url = new URL(address);
       if (/\/(images\/generations|responses|chat\/completions)\/?$/.test(url.pathname)) {
@@ -29,7 +39,7 @@ export function switchImageProtocol(settings: ImageSettings, protocol: ImageProt
       }
     } catch { /* Keep an incomplete address editable. */ }
   }
-  return { ...settings, address, protocol };
+  return { ...settings, address, addressMode, protocol };
 }
 
 export function imageRequestSize(ratio: CoverRatio, model: string): string | undefined {

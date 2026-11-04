@@ -13,6 +13,28 @@ describe('native image protocols', () => {
     for (const route of ['images/generations', 'responses', 'chat/completions']) expect(inferredModelsAddress({ address: `https://p.example/custom/v1/${route}`, addressMode: 'endpoint', modelsAddress: '' })).toBe('https://p.example/custom/v1/models');
     expect(() => inferredModelsAddress({ address: 'https://p.example/private-route', addressMode: 'endpoint', modelsAddress: '' })).toThrow('模型列表地址');
   });
+  it('recognizes versioned base addresses even when the old form says full endpoint', () => {
+    for (const path of ['/v1', '/v1/', '/proxy/v2/', '/v1?version=2026']) {
+      const address = `https://p.example${path}`;
+      const expected = new URL(address);
+      expected.pathname = `${expected.pathname.replace(/\/+$/, '')}/models`;
+      expect(inferredModelsAddress({ address, addressMode: 'endpoint', modelsAddress: '' })).toBe(expected.href);
+      for (const [protocol, suffix] of [['responses', '/responses'], ['chat', '/chat/completions'], ['images', '/images/generations']] as const) {
+        expected.pathname = `${new URL(address).pathname.replace(/\/+$/, '')}${suffix}`;
+        expect(configuredEndpoint({ address, addressMode: 'endpoint', protocol })).toBe(expected.href);
+      }
+    }
+    expect(inferredModelsAddress({ address: 'https://p.example', addressMode: 'endpoint', modelsAddress: '' })).toBe('https://p.example/models');
+    expect(configuredEndpoint({ address: 'https://p.example', addressMode: 'endpoint', protocol: 'responses' })).toBe('https://p.example/responses');
+  });
+  it('does not append twice to standard full endpoints and preserves custom address choices', () => {
+    const full = { address: 'https://p.example/v1/responses/?version=1', addressMode: 'base' as const, protocol: 'responses' as const, modelsAddress: '' };
+    expect(configuredEndpoint(full)).toBe(full.address);
+    expect(inferredModelsAddress(full)).toBe('https://p.example/v1/models?version=1');
+    expect(configuredEndpoint({ ...full, address: 'https://p.example/gateway', addressMode: 'endpoint' })).toBe('https://p.example/gateway');
+    expect(configuredEndpoint({ ...full, address: 'https://p.example/gateway' })).toBe('https://p.example/gateway/responses');
+    expect(inferredModelsAddress({ ...full, modelsAddress: 'https://p.example/catalog' })).toBe('https://p.example/catalog');
+  });
   it('keeps Responses native tool options and uses a single ratio selection for each protocol', () => {
     const responses = protocolRequest({ ...defaultImageSettings, protocol: 'responses' }, 'prompt');
     expect(responses).toEqual({ model: 'gpt-image-2', input: 'prompt', tools: [{ type: 'image_generation', size: 'auto', output_format: 'png' }], tool_choice: { type: 'image_generation' }, stream: false, store: false });

@@ -1,4 +1,4 @@
-import { protocolPath, imageRequestSize, type ImageSettings } from '../shared/images';
+import { protocolPath, imageRequestSize, imageAddressMode, type ImageSettings } from '../shared/images';
 import { AppError } from './workspace';
 
 export type ImageSource = { url?: string; b64_json?: string };
@@ -78,7 +78,7 @@ export function protocolImage(payload: unknown, settings: Pick<ImageSettings, 'p
 export function inferredModelsAddress(settings: Pick<ImageSettings, 'address' | 'addressMode' | 'modelsAddress'>): string {
   if (settings.modelsAddress) return settings.modelsAddress;
   const url = new URL(settings.address);
-  if (settings.addressMode === 'base') url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
+  if (imageAddressMode(settings.address, settings.addressMode) === 'base') url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
   else if (/\/(images\/generations|responses|chat\/completions)\/?$/.test(url.pathname)) url.pathname = url.pathname.replace(/\/(images\/generations|responses|chat\/completions)\/?$/, '/models');
   else throw new AppError(400, '无法从自定义接口推导模型地址，请填写“模型列表地址”。', 'MODEL_ADDRESS_REQUIRED');
   return url.href;
@@ -86,6 +86,6 @@ export function inferredModelsAddress(settings: Pick<ImageSettings, 'address' | 
 
 export function configuredEndpoint(settings: Pick<ImageSettings, 'address' | 'addressMode'> & Partial<Pick<ImageSettings, 'protocol'>>): string {
   const url = new URL(settings.address);
-  if (settings.addressMode === 'base') url.pathname = `${url.pathname.replace(/\/+$/, '')}${protocolPath(settings.protocol || 'images')}`;
+  if (imageAddressMode(settings.address, settings.addressMode) === 'base') url.pathname = `${url.pathname.replace(/\/+$/, '')}${protocolPath(settings.protocol || 'images')}`;
   return url.href;
 }

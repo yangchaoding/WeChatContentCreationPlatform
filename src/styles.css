@@ -111,6 +111,14 @@
 .image-field-full{grid-column:1/-1}
 .image-key-clear{font-size:11px;color:#809078;display:flex;align-items:center;gap:6px}
 .image-style-input{display:block;width:100%;min-height:90px;resize:vertical;padding:11px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.8;font-size:12px}
+.cover-prompt-editor{margin-top:18px;padding-top:18px;border-top:1px solid var(--border)}
+.cover-prompt-heading,.cover-prompt-footer,.cover-prompt-footer>div{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cover-prompt-heading{margin-bottom:10px}
+.cover-prompt-heading .field-label{margin:0}
+.cover-prompt-heading .text-button,.cover-prompt-footer .text-button{font-size:11px}
+.cover-prompt-editor>.field-label{margin-top:14px;margin-bottom:8px}
+.cover-prompt-footer{margin-top:10px;font-size:11px;color:#809078}
+.cover-prompt-footer>div{margin-left:auto}
 .image-success{display:flex;align-items:center;gap:6px;color:var(--green);font-size:12px;margin-top:16px}
 .image-model-heading,.image-model-footer{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .image-model-heading .text-button{font-size:11px}

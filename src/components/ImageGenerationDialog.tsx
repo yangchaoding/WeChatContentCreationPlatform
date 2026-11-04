@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Download, LoaderCircle, RefreshCw, Settings2, Sparkles } from 'lucide-react';
+import { Check, Copy, Download, LoaderCircle, Plus, RefreshCw, Settings2, Sparkles } from 'lucide-react';
 import Modal from './Modal';
 import { api, errorMessage, query } from '../lib/api';
 import { copyImage } from '../lib/render';
 import { coverRatios, defaultCoverStyle, defaultImageSettings, imageProtocols, imageAddressMode, protocolPath, switchImageProtocol, type GeneratedCover, type ImageModel, type ImageModelList, type ImageProtocol, type ImageSettings } from '../../shared/images';
+import { defaultCoverPrompts, MAX_COVER_PROMPTS, MAX_PROMPT_CONTENT, MAX_PROMPT_NAME, type CoverPromptLibrary } from '../../shared/image-prompts';
 
 export default function ImageGenerationDialog({ directory, articlePath, content, onInsert, onClose }: {
   directory: string;
@@ -16,6 +17,11 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
   const [style, setStyle] = useState(defaultCoverStyle);
+  const [promptLibrary, setPromptLibrary] = useState(defaultCoverPrompts);
+  const [promptId, setPromptId] = useState(promptLibrary.selectedId);
+  const [promptName, setPromptName] = useState(promptLibrary.prompts[0].name);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const promptNameInput = useRef<HTMLInputElement | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -35,17 +41,43 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
   const modelsController = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
   const pending = useRef<{ requestId: string; directory: string; articlePath: string; content: string; style: string } | null>(null);
-  const disabled = loading || saving || busy;
+  const disabled = loading || saving || busy || promptSaving;
   const locked = disabled || attempted;
+  const selectedPrompt = promptLibrary.prompts.find((item) => item.id === promptId);
+  const promptDirty = !selectedPrompt || promptName !== selectedPrompt.name || style !== selectedPrompt.content;
+  const applyPromptLibrary = (library: CoverPromptLibrary) => {
+    const prompt = library.prompts.find((item) => item.id === library.selectedId)!;
+    setPromptLibrary(library); setPromptId(prompt.id); setPromptName(prompt.name); setStyle(prompt.content);
+  };
   useEffect(() => {
     let active = true;
-    void api<ImageSettings>('/image-settings').then((value) => {
+    void Promise.all([api<ImageSettings>('/image-settings'), api<CoverPromptLibrary>('/image-prompts')]).then(([value, library]) => {
       if (!active) return;
       setSettings({ ...value, addressMode: imageAddressMode(value.address, value.addressMode) });
       setConfigOpen(!value.hasApiKey);
+      applyPromptLibrary(library);
     }).catch((failure) => { if (active) { setError(errorMessage(failure)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; modelsRequest.current++; modelsController.current?.abort(); };
   }, []);
+  useEffect(() => { if (!promptId) promptNameInput.current?.focus(); }, [promptId]);
+
+  const persistPrompt = async (selectionId?: string) => {
+    if (inFlight.current || locked || loadFailed || (selectionId && promptDirty)) return;
+    inFlight.current = true;
+    setPromptSaving(true); setError(''); setMessage('');
+    try {
+      const library = await api<CoverPromptLibrary>(selectionId ? '/image-prompts/selection' : '/image-prompts', {
+        method: selectionId ? 'PUT' : 'POST',
+        body: selectionId ? { id: selectionId } : { ...(promptId ? { id: promptId } : {}), name: promptName, content: style },
+      });
+      applyPromptLibrary(library);
+      setMessage(selectionId ? '已切换提示词，下次打开会继续使用。' : '提示词已保存到本机，下次打开可直接使用。');
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setPromptSaving(false); inFlight.current = false; }
+  };
+  const newPrompt = () => {
+    setPromptId(''); setPromptName(''); setStyle(''); setError(''); setMessage('');
+  };
 
   const invalidateModels = () => {
     modelsRequest.current++;
@@ -134,11 +166,11 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
     catch (failure) { setError(errorMessage(failure)); }
   };
 
-  return <Modal title="生成文章封面" subtitle="根据当前文章内容生成一张图片，并插入正文开头。" wide busy={busy || saving} onClose={onClose} footer={<>
-    <button className="button button-secondary" disabled={busy || saving} onClick={onClose}>{result ? '完成' : '关闭'}</button>
+  return <Modal title="生成文章封面" subtitle="根据当前文章内容生成一张图片，并插入正文开头。" wide busy={busy || saving || promptSaving} onClose={onClose} footer={<>
+    <button className="button button-secondary" disabled={busy || saving || promptSaving} onClick={onClose}>{result ? '完成' : '关闭'}</button>
     {result ? <button className="button button-secondary" onClick={reset}>准备重新生成</button> : <>
       {attempted && <button className="text-button" disabled={busy} onClick={reset}>调整后重新生成</button>}
-      <button className="button button-primary" disabled={disabled || modelsLoading || loadFailed || !content.trim() || !settings.model.trim()} onClick={() => void generate()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}{busy ? '正在生成并保存…' : attempted ? '重试同一请求' : '生成并插入'}</button>
+      <button className="button button-primary" disabled={disabled || modelsLoading || loadFailed || !content.trim() || !settings.model.trim() || !style.trim()} onClick={() => void generate()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}{busy ? '正在生成并保存…' : attempted ? '重试同一请求' : '生成并插入'}</button>
     </>}
   </>}>
     {loading ? <p className="field-help"><LoaderCircle size={15} className="spin" /> 正在读取接口配置…</p> : <>
@@ -166,8 +198,16 @@ export default function ImageGenerationDialog({ directory, articlePath, content,
         <button className="button button-secondary" disabled={locked || modelsLoading || loadFailed || !settings.model.trim()} onClick={() => void save()}>{saving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} 保存接口配置</button>
       </details>
       <p className="field-help">{imageProtocols.find((item) => item.id === settings.protocol)?.label} · {settings.model} · {settings.aspectRatio === 'original' ? '自动尺寸' : settings.aspectRatio}。可展开接口配置修改。</p>
-      <label className="field-label" htmlFor="cover-style">画面要求</label>
-      <textarea id="cover-style" className="image-style-input" value={style} maxLength={2000} disabled={locked} onChange={(event) => setStyle(event.target.value)} />
+      <section className="cover-prompt-editor" aria-label="画面提示词">
+        <div className="cover-prompt-heading"><label className="field-label" htmlFor="cover-prompt">画面提示词</label><button className="text-button" disabled={locked || loadFailed || promptDirty || promptLibrary.prompts.length >= MAX_COVER_PROMPTS} onClick={newPrompt}><Plus size={14} /> 新增提示词</button></div>
+        <select id="cover-prompt" className="text-input" value={promptId} disabled={locked || loadFailed || promptDirty} onChange={(event) => void persistPrompt(event.target.value)}>{!promptId && <option value="">新提示词（未保存）</option>}{promptLibrary.prompts.map((prompt) => <option key={prompt.id} value={prompt.id}>{prompt.name}</option>)}</select>
+        <label className="field-label" htmlFor="cover-prompt-name">提示词名称</label>
+        <input id="cover-prompt-name" ref={promptNameInput} className="text-input" value={promptName} maxLength={MAX_PROMPT_NAME} disabled={locked || loadFailed} placeholder="例如：水彩插画、科技感封面" onChange={(event) => { setPromptName(event.target.value); setMessage(''); }} />
+        <label className="field-label" htmlFor="cover-style">提示词内容</label>
+        <textarea id="cover-style" className="image-style-input" value={style} maxLength={MAX_PROMPT_CONTENT} disabled={locked || loadFailed} onChange={(event) => { setStyle(event.target.value); setMessage(''); }} />
+        <div className="cover-prompt-footer"><span>{promptDirty ? '未保存 · ' : ''}{style.length} / {MAX_PROMPT_CONTENT}</span><div>{promptDirty && <button className="text-button" disabled={locked} onClick={() => { applyPromptLibrary(promptLibrary); setError(''); setMessage(''); }}>取消修改</button>}<button className="button button-secondary" disabled={locked || loadFailed || !promptDirty || !promptName.trim() || !style.trim()} onClick={() => void persistPrompt()}>{promptSaving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} 保存提示词</button></div></div>
+        <p className="field-help">{promptDirty ? '修改后请保存或取消，再切换、新增提示词。未保存的内容仅用于本次生成。' : '可修改当前提示词并保存，或新增常用提示词。下次打开会恢复上次选择。'}</p>
+      </section>
       <p className="field-help">文章：{articlePath}。自动结合标题、摘要和正文；每次生成一张。</p>
       {busy && <p className="extract-progress" role="status"><LoaderCircle size={17} className="spin" /> 正在生成、下载并转换为 PNG，请稍候…</p>}
       {result && <div className="generated-cover"><img src={assetUrl} alt="生成的文章封面" /><div><span>{result.aspectRatio && result.aspectRatio !== 'original' ? `${result.aspectRatio} · ` : ''}{result.width} × {result.height} · PNG · 已保存到文章目录</span><div className="cover-actions"><button className="button button-secondary" onClick={() => void copy()}><Copy size={14} /> 复制封面图片</button><a className="button button-secondary" href={`${assetUrl}&download=1`} download><Download size={14} /> 下载 PNG</a>{!inserted && <button className="button button-primary" onClick={() => { try { insert(result); } catch (failure) { setError(errorMessage(failure)); } }}>插入文章开头</button>}</div></div></div>}

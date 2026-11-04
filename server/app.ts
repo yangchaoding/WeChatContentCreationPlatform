@@ -9,6 +9,7 @@ import { AppError, WorkspaceService } from './workspace';
 import { extractTheme, fetchWeChatArticle, safeStyles } from './extract';
 import fs from 'node:fs/promises';
 import { compatiblePng, ImageService } from './images';
+import { CoverPromptStore } from './image-prompts';
 
 const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => { Promise.resolve(handler(req, res)).catch(next); };
 const textField = (value: unknown, name: string, max = 2048) => {
@@ -52,6 +53,8 @@ export async function createLocalApp(options: { storageDirectory: string; initia
   await service.init();
   const images = new ImageService(service);
   await images.init();
+  const imagePrompts = new CoverPromptStore(options.storageDirectory);
+  await imagePrompts.init();
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -72,19 +75,33 @@ export async function createLocalApp(options: { storageDirectory: string; initia
 
   const clients = new Set<Response>();
   let watcher: FSWatcher | undefined;
+  let watching = false;
   let timer: NodeJS.Timeout | undefined;
-  const broadcast = (event: string) => { for (const client of clients) client.write(`data: ${JSON.stringify({ type: event })}\n\n`); };
+  const broadcast = (event: string, detail = {}) => { for (const client of clients) client.write(`data: ${JSON.stringify({ type: event, ...detail })}\n\n`); };
   const watchDirectory = async () => {
     await watcher?.close();
+    watcher = undefined; watching = false;
+    clearTimeout(timer);
+    broadcast('watch-status', { watching });
     if (!options.watch) return;
     const watchedRoot = service.directory;
-    watcher = chokidar.watch(watchedRoot, { ignoreInitial: true, depth: 12, ignored: (filePath) => path.relative(watchedRoot, filePath).split(/[/\\]/).some((segment) => segment.startsWith('.') || ['node_modules', 'dist', 'build'].includes(segment)), awaitWriteFinish: { stabilityThreshold: 350, pollInterval: 100 } });
+    let watchFailed = false;
+    const nextWatcher = chokidar.watch(watchedRoot, { ignoreInitial: true, depth: 12, ignored: (filePath) => path.relative(watchedRoot, filePath).split(/[/\\]/).some((segment) => segment.startsWith('.') || ['node_modules', 'dist', 'build'].includes(segment)), awaitWriteFinish: { stabilityThreshold: 350, pollInterval: 100 } });
+    watcher = nextWatcher;
+    watcher.on('ready', () => {
+      if (watcher !== nextWatcher) return;
+      watching = !watchFailed; broadcast('watch-status', { watching });
+    });
     watcher.on('all', (event, filePath) => {
+      if (watcher !== nextWatcher) return;
       if (event !== 'addDir' && event !== 'unlinkDir' && !/\.md$/i.test(filePath)) return;
       clearTimeout(timer);
       timer = setTimeout(() => broadcast('files-changed'), 250);
     });
-    watcher.on('error', () => broadcast('watch-error'));
+    watcher.on('error', () => {
+      if (watcher !== nextWatcher) return;
+      watchFailed = true; watching = false; broadcast('watch-error');
+    });
   };
   await watchDirectory();
   const checkScope = (req: Request) => {
@@ -105,7 +122,7 @@ export async function createLocalApp(options: { storageDirectory: string; initia
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-    res.write(': connected\n\n');
+    res.write(`data: ${JSON.stringify({ type: 'watch-status', watching })}\n\n`);
     clients.add(res);
     const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 25000);
     req.on('close', () => { clearInterval(heartbeat); clients.delete(res); });
@@ -150,6 +167,9 @@ export async function createLocalApp(options: { storageDirectory: string; initia
   }));
   app.get('/api/image-settings', (_req, res) => res.json(images.publicSettings));
   app.put('/api/image-settings', asyncRoute(async (req, res) => res.json(await images.saveSettings(req.body))));
+  app.get('/api/image-prompts', (_req, res) => res.json(imagePrompts.library));
+  app.post('/api/image-prompts', asyncRoute(async (req, res) => res.json(await imagePrompts.save(req.body))));
+  app.put('/api/image-prompts/selection', asyncRoute(async (req, res) => res.json(await imagePrompts.select(req.body?.id))));
   app.get('/api/images/models', asyncRoute(async (_req, res) => res.json(await images.listModels())));
   app.post('/api/images/models', asyncRoute(async (req, res) => res.json(await images.listModels(req.body))));
   app.post('/api/images/generate', asyncRoute(async (req, res) => {

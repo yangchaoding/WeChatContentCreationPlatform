@@ -6,6 +6,8 @@ import { insertCover, type GeneratedCover } from '../../shared/images';
 
 export type Notify = (message: string, kind?: 'success' | 'error' | 'info') => void;
 export type SaveStatus = 'saved' | 'pending' | 'saving' | 'error';
+type RefreshScope = 'all' | 'workspace' | 'themes';
+const mergeScope = (a: RefreshScope, b: RefreshScope): RefreshScope => a === b ? a : 'all';
 
 export function useWorkbench(notify: Notify) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -37,6 +39,8 @@ export function useWorkbench(notify: Notify) {
   const loadSequence = useRef(0);
   const initialized = useRef(false);
   const errorRef = useRef('');
+  const refreshPromise = useRef<Promise<void> | null>(null);
+  const queuedRefresh = useRef<{ scope: RefreshScope; reportError: boolean } | null>(null);
 
   const updateWorkspace = useCallback((value: Workspace) => { workspaceRef.current = value; setWorkspace(value); }, []);
   const updateThemes = useCallback((value: Theme[]) => { themeLibraryVersion.current++; themesRef.current = value; setThemes(value); }, []);
@@ -167,14 +171,18 @@ export function useWorkbench(notify: Notify) {
 
   useEffect(() => { void initialize(); }, [initialize]);
 
-  const refresh = useCallback(async (reportError = false) => {
+  const performRefresh = useCallback(async (reportError: boolean, scope: RefreshScope) => {
     if (switchingRef.current || !initialized.current) return;
     try {
       const libraryVersion = themeLibraryVersion.current;
-      const [root, themeList] = await Promise.all([api<Workspace>('/workspace'), api<ThemeLibrary>('/themes')]);
+      const [root, themeList] = await Promise.all([
+        scope === 'themes' ? Promise.resolve(null) : api<Workspace>('/workspace'),
+        scope === 'workspace' ? Promise.resolve(null) : api<ThemeLibrary>('/themes'),
+      ]);
       if (switchingRef.current) return;
-      if (libraryVersion === themeLibraryVersion.current) updateThemeLibrary(themeList);
+      if (themeList && libraryVersion === themeLibraryVersion.current) updateThemeLibrary(themeList);
       setConnected(true);
+      if (!root) return;
       const oldRoot = workspaceRef.current;
       const current = articleRef.current;
       if (root.directory !== oldRoot?.directory) {
@@ -212,15 +220,72 @@ export function useWorkbench(notify: Notify) {
     } catch (error) { setConnected(false); if (reportError) notify(errorMessage(error), 'error'); }
   }, [applyArticle, chooseInitial, markError, notify, updateThemeLibrary, updateWorkspace]);
 
+  const refresh = useCallback((reportError = false, scope: RefreshScope = 'all'): Promise<void> => {
+    const queued = queuedRefresh.current;
+    queuedRefresh.current = { scope: queued ? mergeScope(queued.scope, scope) : scope, reportError: reportError || Boolean(queued?.reportError) };
+    if (refreshPromise.current) return refreshPromise.current;
+    const promise = (async () => {
+      try {
+        // Keep one request batch in flight; changes arriving during it get one merged follow-up.
+        while (queuedRefresh.current) {
+          const next = queuedRefresh.current;
+          queuedRefresh.current = null;
+          await performRefresh(next.reportError, next.scope);
+        }
+      } finally { refreshPromise.current = null; }
+    })();
+    refreshPromise.current = promise;
+    return promise;
+  }, [performRefresh]);
+
   useEffect(() => {
     const events = new EventSource('/api/events');
-    events.onmessage = () => { void refresh(); };
-    events.onopen = () => setConnected(true);
-    events.onerror = () => setConnected(false);
-    const interval = window.setInterval(() => { void refresh(); }, 15000);
-    const onFocus = () => { void refresh(); };
+    let opened = false, hasOpened = false, watching = false, receivedWatchStatus = false;
+    let interval: number | undefined, debounce: number | undefined, scheduled: RefreshScope | null = null;
+    const schedule = (scope: RefreshScope) => {
+      scheduled = scheduled ? mergeScope(scheduled, scope) : scope;
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => {
+        const next = scheduled;
+        scheduled = null;
+        if (next) void refresh(false, next);
+      }, 250);
+    };
+    const updateFallback = () => {
+      if (opened && watching) { window.clearInterval(interval); interval = undefined; }
+      else if (interval === undefined) interval = window.setInterval(() => {
+        if (document.visibilityState !== 'hidden') void refresh();
+      }, 15000);
+    };
+    events.onmessage = (event) => {
+      let message: { type?: string; watching?: boolean };
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (!message || typeof message !== 'object') return;
+      if (message.type === 'files-changed' || message.type === 'workspace-changed') schedule('workspace');
+      else if (message.type === 'themes-changed') schedule('themes');
+      else if (message.type === 'watch-status') {
+        const recovering = receivedWatchStatus && !watching && message.watching === true;
+        receivedWatchStatus = true;
+        watching = message.watching === true;
+        updateFallback();
+        if (recovering) schedule('all');
+      } else if (message.type === 'watch-error') { watching = false; updateFallback(); }
+    };
+    events.onopen = () => {
+      opened = true; setConnected(true); updateFallback();
+      if (hasOpened) schedule('all');
+      hasOpened = true;
+    };
+    events.onerror = () => { opened = false; watching = false; setConnected(false); updateFallback(); };
+    updateFallback();
+    const onFocus = () => schedule('all');
+    const onVisibility = () => { if (document.visibilityState !== 'hidden' && (!opened || !watching)) schedule('all'); };
     window.addEventListener('focus', onFocus);
-    return () => { events.close(); window.clearInterval(interval); window.removeEventListener('focus', onFocus); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      events.close(); window.clearInterval(interval); window.clearTimeout(debounce);
+      window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [refresh]);
 
   const setContent = useCallback((value: string) => { contentRef.current = value; setContentState(value); if (!errorRef.current) setSaveStatus('pending'); }, []);

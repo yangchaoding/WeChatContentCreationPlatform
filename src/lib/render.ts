@@ -11,6 +11,20 @@ const apply = (element: HTMLElement, rules: CssRules) => { for (const [key, valu
 const escapeText = (value: string) => { const element = document.createElement('span'); element.textContent = value; return element.innerHTML; };
 const languageNames: Record<string, string> = { js: 'JavaScript', javascript: 'JavaScript', ts: 'TypeScript', typescript: 'TypeScript', jsx: 'JSX', tsx: 'TSX', py: 'Python', python: 'Python', sh: 'Shell', bash: 'Shell', shell: 'Shell', powershell: 'PowerShell', ps1: 'PowerShell', java: 'Java', cs: 'C#', csharp: 'C#', cpp: 'C++', c: 'C', go: 'Go', rust: 'Rust', text: 'TEXT', plaintext: 'TEXT' };
 
+function preserveCodeLines(element: HTMLElement) {
+  const pre = element.parentElement!;
+  apply(pre, { width: '100%', 'max-width': '100%', 'box-sizing': 'border-box', 'overflow-x': 'auto', 'overflow-y': 'hidden', '-webkit-overflow-scrolling': 'touch' });
+  apply(element, { display: 'block', width: 'max-content', 'min-width': '100%', 'max-width': 'none', 'box-sizing': 'border-box' });
+  for (const node of [pre, element]) {
+    apply(node, { 'font-family': fontFamilies.mono, 'letter-spacing': '0', 'word-spacing': '0', 'font-variant-ligatures': 'none', '-webkit-text-size-adjust': '100%', 'text-size-adjust': '100%' });
+  }
+  // Publish these rules inline as well as in preview. Host styles must not break
+  // source lines (including CJK strings and alignment comments) on narrow screens.
+  for (const node of [pre, element, ...element.querySelectorAll<HTMLElement>('span')]) {
+    for (const [key, value] of Object.entries({ 'white-space': 'pre', 'word-break': 'normal', 'overflow-wrap': 'normal', 'word-wrap': 'normal' })) node.style.setProperty(key, value, 'important');
+  }
+}
+
 function renderTextDiagram(element: HTMLElement, code: string) {
   const layout = { 'font-family': fontFamilies.mono, 'white-space': 'pre', 'word-break': 'normal', 'overflow-wrap': 'normal', 'letter-spacing': '0', 'word-spacing': '0', 'font-variant-ligatures': 'none', 'line-height': '1.2', 'tab-size': '4' };
   apply(element.parentElement!, { ...layout, 'overflow-x': 'auto', 'max-width': '100%', 'box-sizing': 'border-box' });
@@ -66,7 +80,7 @@ function themeRules(theme: Theme, settings: ArticleSettings): Record<string, Css
     a: { color: accent, 'text-decoration': 'none', 'border-bottom': `1px solid ${accent}`, 'word-break': 'break-all' },
     hr: { border: 'none', 'border-top': `1px solid ${theme.soft}`, margin: '32px 0', height: '0' },
     img: { display: 'block', 'max-width': '100%', height: 'auto', margin: '22px auto', 'border-radius': '4px' },
-    pre: { margin: '22px 0', padding: '18px 16px', 'background-color': palette.background, 'border-radius': '5px', 'font-size': codeSize, 'line-height': '1.75', 'white-space': 'pre-wrap', 'word-break': 'break-word', color: palette.text, 'text-align': 'left', ...(framedCode ? { 'letter-spacing': '0', 'overflow-wrap': 'anywhere', 'tab-size': '2' } : {}) },
+    pre: { margin: '22px 0', padding: '18px 16px', 'background-color': palette.background, 'border-radius': '5px', 'font-size': codeSize, 'line-height': '1.75', 'white-space': 'pre', 'word-break': 'normal', color: palette.text, 'text-align': 'left', 'tab-size': '2' },
     code: { 'font-family': fontFamilies.mono, 'font-size': '0.88em', 'background-color': theme.soft, color: accent, padding: '2px 5px', 'border-radius': '3px', 'word-break': 'break-word' },
     table: { 'border-collapse': 'collapse', width: '100%', margin: '22px 0', 'font-size': px(fontSize - 2), 'line-height': '1.7', 'table-layout': 'fixed' },
     th: { 'background-color': theme.soft, color: accent, padding: '10px 8px', border: '1px solid #e6e9e7', 'font-weight': '600', 'text-align': 'left', 'word-break': 'break-word' },
@@ -130,6 +144,7 @@ export function renderMarkdown(content: string, theme: Theme, settings: ArticleS
       span.style.color = color;
     });
     if (isDiagram) renderTextDiagram(element, code);
+    preserveCodeLines(element);
     if (theme.codeStyle === 'dark' || theme.codeStyle === 'warm') {
       const pre = element.parentElement!;
       const frame = document.createElement('section');

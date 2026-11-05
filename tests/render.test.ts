@@ -106,10 +106,10 @@ describe('text diagrams', () => {
     expect(document.querySelector('script')).toBeNull();
   });
 
-  it('keeps explicit programming languages and ordinary unlabelled code highlighted and wrapped', () => {
+  it('keeps explicit programming languages and ordinary unlabelled code highlighted without wrapping', () => {
     const { document } = render('```js\nconst border = "┌──┐";\n```\n\n```\nconst count = 123;\n```');
     for (const pre of document.querySelectorAll('pre')) {
-      expect(pre.style.whiteSpace).toBe('pre-wrap');
+      expect(pre.style.whiteSpace).toBe('pre');
       expect(pre.querySelector('span[style]')).not.toBeNull();
       expect(pre.querySelector('span[style*="inline-block"]')).toBeNull();
     }
@@ -154,7 +154,7 @@ describe.each(['programming', 'claude'] as const)('%s code theme', (themeId) => 
     expect(blocks.map((pre) => pre.querySelector('code')?.textContent?.trim())).toEqual(['print("你好")', '运行成功：1 条任务', '这是一行没有语言标记的代码']);
   });
 
-  it('scales code with the article font, wraps long lines and separates inline code from blocks', () => {
+  it('scales code with the article font, scrolls long lines and separates inline code from blocks', () => {
     const longLine = 'const documentationUrl = "https://example.com/' + 'a'.repeat(160) + '";\n';
     const document = renderTutorial('# 教程\n\n使用 `completeTodo()` 完成任务。\n\n```javascript\n' + longLine + '```', 18);
     const pre = document.querySelector('pre')!;
@@ -162,11 +162,13 @@ describe.each(['programming', 'claude'] as const)('%s code theme', (themeId) => 
     const inline = document.querySelector('p code') as HTMLElement;
     expect(pre.style.fontSize).toBe('16px');
     expect(block.style.fontSize).toBe('16px');
-    expect(pre.style.whiteSpace).toBe('pre-wrap');
-    expect(pre.style.overflowWrap).toBe('anywhere');
+    expect(pre.style.whiteSpace).toBe('pre');
+    expect(pre.style.overflowWrap).toBe('normal');
+    expect(pre.style.overflowX).toBe('auto');
     expect(block.textContent).toBe(longLine);
     expect(block.style.backgroundColor).toBe('transparent');
     expect(inline.style.backgroundColor).not.toBe('transparent');
     expect(inline.style.fontFamily).toContain('monospace');
+    expect(inline.style.wordBreak).toBe('break-word');
   });
 });

@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { coverPrompt, coverRatios, defaultImageSettings, imageProtocols, imageAddressMode, type CoverRatio, type GeneratedCover, type ImageModelList, type ImageProtocol, type ImageSettings } from '../shared/images';
 import { AppError, type WorkspaceService } from './workspace';
 import { configuredEndpoint, inferredModelsAddress, protocolImage, protocolRequest, type ImageSource } from './image-protocols';
+import { ImageNetwork } from './image-network';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 type PrivateSettings = Omit<ImageSettings, 'hasApiKey'> & { apiKey: string };
@@ -33,24 +34,29 @@ async function atomicJson(filename: string, value: unknown) {
   } finally { await fs.unlink(temporary).catch(() => {}); }
 }
 
-async function boundedBody(response: Response, limit: number): Promise<Buffer> {
+async function boundedBody(response: Response, limit: number, signal?: AbortSignal): Promise<Buffer> {
   if (Number(response.headers.get('content-length')) > limit) {
     await response.body?.cancel();
     throw new AppError(413, '图片服务返回的数据过大，请降低尺寸后重试。');
   }
   if (!response.body) throw new AppError(502, '图片服务返回了空内容。');
   const reader = response.body.getReader();
+  // Cancel the reader explicitly too: a stalled transport must not outlive the deadline.
+  const abort = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+  signal?.addEventListener('abort', abort, { once: true });
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
+    signal?.throwIfAborted();
     while (true) {
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       length += value.length;
       if (length > limit) throw new AppError(413, '图片服务返回的数据过大，请降低尺寸后重试。');
       chunks.push(value);
     }
-  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  } finally { signal?.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
   return Buffer.concat(chunks);
 }
 
@@ -69,10 +75,12 @@ export async function compatiblePng(input: Buffer, aspectRatio: CoverRatio = 'or
 }
 
 export class ImageService {
+  private network = new ImageNetwork();
   private settings: PrivateSettings = { ...defaultImageSettings, apiKey: '' };
   private settingsQueue = Promise.resolve();
   private active = new Map<string, { fingerprint: string; promise: Promise<GeneratedCover> }>();
   constructor(private workspace: WorkspaceService) {}
+  async close() { await this.network.close(); }
   private get settingsFile() { return path.join(this.workspace.storageDirectory, 'image-settings.json'); }
   private get jobsDirectory() { return path.join(this.workspace.storageDirectory, 'image-jobs'); }
 
@@ -136,12 +144,12 @@ export class ImageService {
     webUrl(endpoint);
     const signal = AbortSignal.timeout(Math.min(settings.timeoutSeconds, 30) * 1000);
     try {
-      const response = await fetch(endpoint, { method: 'GET', signal, redirect: 'error', headers: { Authorization: `Bearer ${settings.apiKey}`, Accept: 'application/json' } });
+      const response = await this.network.fetch(endpoint, { method: 'GET', signal, redirect: 'error', headers: { Authorization: `Bearer ${settings.apiKey}`, Accept: 'application/json' } });
       if (!response.ok) {
         await response.body?.cancel();
         throw new AppError(502, `获取模型列表失败（HTTP ${response.status}）。请检查密钥、模型列表地址，或手动填写模型。`, 'MODELS_PROVIDER_ERROR');
       }
-      const body = await boundedBody(response, 2 * 1024 * 1024);
+      const body = await boundedBody(response, 2 * 1024 * 1024, signal);
       let payload: { data?: unknown[] };
       try { payload = JSON.parse(body.toString('utf8')); }
       catch { throw new AppError(502, '模型列表不是有效 JSON，请检查模型列表地址。', 'MODELS_RESPONSE_INVALID'); }
@@ -193,13 +201,14 @@ export class ImageService {
 
   private async run(input: { requestId: string; articlePath: string; content: string; style: string }, settings: PrivateSettings, root: string, filename: string, job: Job): Promise<GeneratedCover> {
     const endpoint = imageEndpoint(settings);
-    const signal = AbortSignal.timeout(settings.timeoutSeconds * 1000);
+    let signal: AbortSignal | undefined;
     let stage: GenerationStage = 'prepare';
     try {
       await atomicJson(filename, job);
       if (!job.source) {
         stage = 'request';
-        const response = await fetch(endpoint, {
+        signal = AbortSignal.timeout(settings.timeoutSeconds * 1000);
+        const response = await this.network.fetch(endpoint, {
           method: 'POST', redirect: 'error', signal,
           headers: { Authorization: `Bearer ${settings.apiKey}`, 'Content-Type': 'application/json', 'X-Request-Id': input.requestId },
           body: JSON.stringify(protocolRequest(settings, coverPrompt(input.content, input.articlePath, input.style, settings.aspectRatio))),
@@ -207,7 +216,7 @@ export class ImageService {
         if (!response.ok) {
           let upstream = '';
           try {
-            const payload = JSON.parse((await boundedBody(response, 64 * 1024)).toString('utf8'));
+            const payload = JSON.parse((await boundedBody(response, 64 * 1024, signal)).toString('utf8'));
             const message = payload?.error?.message ?? payload?.message;
             if (typeof message === 'string') upstream = message.replaceAll(settings.apiKey, '[密钥已隐藏]').replace(/Bearer\s+\S+|sk-[a-zA-Z0-9_-]+/gi, '[密钥已隐藏]').replace(/https?:\/\/\S+/gi, '[渠道地址]').replace(/\s+/g, ' ').slice(0, 240);
           } catch { /* HTML gateway errors and oversized bodies use the status-based explanation. */ }
@@ -217,16 +226,24 @@ export class ImageService {
         }
         stage = 'response';
         let payload: unknown;
-        const body = await boundedBody(response, 30 * 1024 * 1024);
+        const body = await boundedBody(response, 30 * 1024 * 1024, signal);
         try { payload = JSON.parse(body.toString('utf8')); }
         catch { throw new AppError(502, '图片服务没有返回有效的 JSON。', 'IMAGE_RESPONSE_INVALID'); }
         job.source = protocolImage(payload, settings);
+        signal = undefined;
         // Persist the upstream result before downloading: a retry resumes this step without generating again.
         stage = 'save';
         await atomicJson(filename, job);
       }
       stage = 'download';
-      const bytes = job.source.b64_json ? this.decodeBase64(job.source.b64_json) : await this.download(job.source.url!, endpoint, settings.apiKey, signal);
+      // Generation can consume the full request budget; downloading gets its own deadline.
+      let bytes: Buffer;
+      if (job.source.b64_json) bytes = this.decodeBase64(job.source.b64_json);
+      else {
+        signal = AbortSignal.timeout(settings.timeoutSeconds * 1000);
+        bytes = await this.download(job.source.url!, endpoint, settings.apiKey, signal);
+      }
+      signal = undefined;
       stage = 'convert';
       const png = await compatiblePng(bytes, settings.aspectRatio);
       // Capture the starting root; another window switching workspace cannot redirect this file write.
@@ -243,7 +260,7 @@ export class ImageService {
       await atomicJson(filename, { fingerprint: job.fingerprint, result });
       return result;
     } catch (error) {
-      const failure = this.failure(error, stage, signal.aborted);
+      const failure = this.failure(error, stage, signal?.aborted === true);
       // Record actionable, sanitized diagnostics without article text, API keys or signed URLs.
       job.lastError = { stage, code: failure.code, message: failure.message, at: new Date().toISOString() };
       await atomicJson(filename, job).catch(() => {});
@@ -253,7 +270,9 @@ export class ImageService {
 
   private failure(error: unknown, stage: GenerationStage, timedOut: boolean): AppError {
     const labels: Record<GenerationStage, string> = { prepare: '准备生成记录', request: '请求图片服务', response: '读取生成结果', download: '下载图片', convert: '转换图片', save: '保存图片及生成记录' };
-    if (timedOut && !(error instanceof AppError)) return new AppError(504, `${labels[stage]}超时。可使用同一请求重试；已收到的图片会继续下载。`, 'IMAGE_TIMEOUT');
+    if (timedOut && !(error instanceof AppError)) return new AppError(504, stage === 'download'
+      ? '下载图片超时。图片链接已保存，点击“重试同一请求”可重新下载，不会再次生成图片。'
+      : `${labels[stage]}超时。可使用同一请求重试。`, 'IMAGE_TIMEOUT');
     if (error instanceof AppError) {
       if (error.code === 'ERROR') error.code = `IMAGE_${stage.toUpperCase()}_FAILED`;
       return error;
@@ -267,6 +286,7 @@ export class ImageService {
       UND_ERR_SOCKET: '服务中断了连接，请稍后重试。',
       UND_ERR_CONNECT_TIMEOUT: '连接图片服务超时，请检查网络或代理。',
       UND_ERR_HEADERS_TIMEOUT: '图片服务迟迟未响应，请稍后重试。',
+      IMAGE_PROXY_INVALID: '代理地址无效或协议不受支持，请检查 HTTP(S) 代理环境变量或系统代理设置。',
       CERT_HAS_EXPIRED: '图片服务证书已过期，请联系渠道修复。',
       UNABLE_TO_VERIFY_LEAF_SIGNATURE: '无法验证图片服务证书，请检查渠道证书或代理设置。',
     };
@@ -284,7 +304,7 @@ export class ImageService {
   private async download(source: string, endpoint: string, apiKey: string, signal: AbortSignal): Promise<Buffer> {
     let url = webUrl(new URL(source, endpoint).href);
     for (let redirects = 0; redirects < 5; redirects++) {
-      const response = await fetch(url, { signal, redirect: 'manual', headers: url.origin === new URL(endpoint).origin ? { Authorization: `Bearer ${apiKey}` } : {} });
+      const response = await this.network.fetch(url, { signal, redirect: 'manual', headers: url.origin === new URL(endpoint).origin ? { Authorization: `Bearer ${apiKey}` } : {} });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         await response.body?.cancel();
         const location = response.headers.get('location');
@@ -293,7 +313,7 @@ export class ImageService {
         continue;
       }
       if (!response.ok) { await response.body?.cancel(); throw new AppError(502, `图片下载返回 HTTP ${response.status}。可重试下载；若临时链接已过期，请重新生成。`); }
-      return boundedBody(response, MAX_IMAGE_BYTES);
+      return boundedBody(response, MAX_IMAGE_BYTES, signal);
     }
     throw new AppError(502, '图片下载重定向次数过多。');
   }

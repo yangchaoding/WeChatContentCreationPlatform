@@ -215,5 +215,5 @@ export async function createLocalApp(options: { storageDirectory: string; initia
     if (status === 500) console.error(error);
     if (!res.headersSent) res.status(status).json({ message, code: error.code || 'ERROR' });
   });
-  return { app, service, close: async () => { clearTimeout(timer); for (const client of clients) client.end(); await watcher?.close(); } };
+  return { app, service, close: async () => { clearTimeout(timer); for (const client of clients) client.end(); await watcher?.close(); await images.close(); } };
 }

@@ -253,6 +253,78 @@ describe('cover generation', () => {
     expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
+  it('gives the download a fresh budget even when the generation deadline expires while downloading', async () => {
+    const generation = new AbortController();
+    const download = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValueOnce(generation.signal).mockReturnValueOnce(download.signal);
+    const fetcher = vi.fn()
+      .mockImplementationOnce(async (_url, options) => {
+        expect(options.signal).toBe(generation.signal);
+        return Response.json({ data: [{ url: 'https://cdn.example/result' }] });
+      })
+      .mockImplementationOnce(async (_url, options) => {
+        // The provider has responded, but its original deadline expires during the download.
+        generation.abort(new DOMException('Request deadline', 'TimeoutError'));
+        options.signal.throwIfAborted();
+        expect(options.signal).toBe(download.signal);
+        return new Response(webp);
+      });
+    vi.stubGlobal('fetch', fetcher);
+    const result = await request(instance.app).post('/api/images/generate').send(generate()).expect(200);
+    expect(result.body).toMatchObject({ width: 16, height: 12 });
+    expect(timeout.mock.calls).toEqual([[config.timeoutSeconds * 1000], [config.timeoutSeconds * 1000]]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('preserves the source after a download body timeout and retries only the download after restart', async () => {
+    const generation = new AbortController();
+    const download = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(generation.signal).mockReturnValueOnce(download.signal);
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ data: [{ url: 'https://cdn.example/slow' }] }))
+      .mockImplementationOnce(async (_url, options) => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(webp.subarray(0, 8));
+          options.signal.addEventListener('abort', () => controller.error(options.signal.reason), { once: true });
+          queueMicrotask(() => download.abort(new DOMException('Download deadline', 'TimeoutError')));
+        },
+      })))
+      .mockResolvedValueOnce(new Response(webp));
+    vi.stubGlobal('fetch', fetcher);
+    const body = generate();
+    const failed = await request(instance.app).post('/api/images/generate').send(body).expect(504);
+    expect(failed.body).toMatchObject({ code: 'IMAGE_TIMEOUT' });
+    expect(failed.body.message).toContain('不会再次生成图片');
+    const jobFile = path.join(temporary, 'state/image-jobs', `${body.requestId}.json`);
+    const job = JSON.parse(await fs.readFile(jobFile, 'utf8'));
+    expect(job).toMatchObject({ source: { url: 'https://cdn.example/slow' }, lastError: { stage: 'download', code: 'IMAGE_TIMEOUT' } });
+    expect(await fs.readdir(path.join(articles, 'notes'))).toEqual(['nested.md']);
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    const result = await request(instance.app).post('/api/images/generate').send(body).expect(200);
+    expect(await sharp(await fs.readFile(path.join(articles, result.body.assetPath))).metadata()).toMatchObject({ format: 'png' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+    expect(fetcher.mock.calls[2][1].signal.aborted).toBe(false);
+    expect(JSON.parse(await fs.readFile(jobFile, 'utf8'))).not.toHaveProperty('lastError');
+  });
+  it('cancels a stalled body reader at the download deadline even if the transport ignores abort', async () => {
+    const download = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(new AbortController().signal).mockReturnValueOnce(download.signal);
+    let reading!: () => void;
+    const waitingForBody = new Promise<void>((resolve) => { reading = resolve; });
+    const cancelled = vi.fn();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ data: [{ url: 'https://cdn.example/stalled' }] }))
+      .mockImplementationOnce(async () => new Response(new ReadableStream({ pull() { reading(); }, cancel: cancelled }))));
+    const response = request(instance.app).post('/api/images/generate').send(generate()).then((value) => value);
+    await waitingForBody;
+    download.abort(new DOMException('Download deadline', 'TimeoutError'));
+    const result = await response;
+    expect(result.status).toBe(504);
+    expect(result.body.code).toBe('IMAGE_TIMEOUT');
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
   it('deduplicates simultaneous requests and preserves X-Request-Id after transport failure', async () => {
     const body = generate();
     const fetcher = vi.fn().mockRejectedValueOnce(new Error(`network ${config.apiKey}`)).mockImplementation(async () => {

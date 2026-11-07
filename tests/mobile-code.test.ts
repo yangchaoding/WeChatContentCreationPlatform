@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { builtInThemes, defaultSettings } from '../shared/themes';
-import { copyRichText, exportHtml, renderMarkdown } from '../src/lib/render';
+import { copyRichText, exportHtml, prepareRichText, renderMarkdown } from '../src/lib/render';
 
 const source = 'user = {"name": "小明", "age": 18}\n#        ↑键     ↑值      ↑键 ↑值\n\n\tprint("<script> & 中文")  \n';
 const markdown = '# 代码示例\n\n正文中的 `user["name"]`。\n\n```python\n' + source + '```\n\n后续正文。';
@@ -51,7 +51,7 @@ describe('mobile code layout and publication', () => {
     expect(pre.textContent).toBe(source);
   });
 
-  it('copies the same no-wrap markup and exact plain text used in preview', async () => {
+  it('copies publication-safe code structure with the exact plain text used in preview', async () => {
     const theme = builtInThemes.find((item) => item.id === 'claude')!;
     const result = renderMarkdown(markdown, theme, defaultSettings(theme));
     let payload: Record<string, Blob> = {};
@@ -62,9 +62,9 @@ describe('mobile code layout and publication', () => {
     vi.stubGlobal('navigator', { clipboard: { write } });
     await copyRichText(result);
     expect(write).toHaveBeenCalledOnce();
-    expect(await blobText(payload['text/html'])).toBe(result.html);
+    expect(await blobText(payload['text/html'])).toBe((await prepareRichText(result)).html);
     expect(await blobText(payload['text/plain'])).toBe(result.text);
-    expect(parse(await blobText(payload['text/html'])).querySelector('pre code')?.textContent).toBe(source);
+    expect(parse(await blobText(payload['text/html'])).querySelector('pre')).toBeNull();
   });
 
   it('exports mobile viewport markup with the same code layout and content', async () => {
@@ -75,9 +75,9 @@ describe('mobile code layout and publication', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     await exportHtml(result);
     const html = await blobText(exported);
-    expect(html).toContain(result.html);
+    expect(html).toContain((await prepareRichText(result)).html);
     expect(parse(html).querySelector('meta[name="viewport"]')?.getAttribute('content')).toBe('width=device-width,initial-scale=1');
-    expect(parse(html).querySelector('pre code')?.textContent).toBe(source);
+    expect(parse(html).querySelector('pre')).toBeNull();
     expect(click).toHaveBeenCalledOnce();
     vi.runAllTimers();
   });

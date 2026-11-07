@@ -4,6 +4,7 @@ import hljs from 'highlight.js/lib/common';
 import { getCodePalette, fontFamilies } from '../../shared/themes';
 import { articleTitle, parseDocument } from '../../shared/document';
 import type { ArticleSettings, CssRules, Theme } from '../../shared/types';
+import { publishCodeBlocks } from './publish-code';
 
 export interface RenderResult { html: string; text: string; localImages: number; title: string }
 const px = (value: number) => `${Math.round(value * 100) / 100}px`;
@@ -319,6 +320,11 @@ export function coverImageSource(rendered: RenderResult): string | null {
   return [...container.querySelectorAll<HTMLImageElement>('img')].find((image) => image.alt === '文章封面' && localImageUrl(image.src))?.src || null;
 }
 
+export async function prepareRichText(rendered: RenderResult): Promise<RenderResult> {
+  const embedded = await embedLocalImages(rendered);
+  return { ...embedded, html: publishCodeBlocks(embedded.html) };
+}
+
 export async function copyImage(source: string) {
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('浏览器不支持复制图片，请下载 PNG 后上传到公众号。');
   const png = pngBlob(source);
@@ -327,7 +333,7 @@ export async function copyImage(source: string) {
 }
 
 export async function copyRichText(rendered: RenderResult) {
-  const prepared = embedLocalImages(rendered);
+  const prepared = prepareRichText(rendered);
   // Start the clipboard operation within the click gesture; image fetches resolve its payload later.
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     try {
@@ -367,6 +373,6 @@ export function downloadFile(content: string, filename: string, type = 'text/mar
 }
 
 export async function exportHtml(rendered: RenderResult) {
-  const embedded = await embedLocalImages(rendered);
+  const embedded = await prepareRichText(rendered);
   downloadFile(`<!doctype html>\n<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeText(rendered.title)}</title></head><body style="margin:0 auto;max-width:677px;background:#fff">${embedded.html}</body></html>`, `${rendered.title}.html`, 'text/html;charset=utf-8');
 }

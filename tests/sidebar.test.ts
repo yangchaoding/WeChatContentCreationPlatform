@@ -21,11 +21,14 @@ describe('workspace article navigation', () => {
   let selectedPath: string | undefined;
   let onSelect: Mock<(path: string) => void>;
   let onClose: Mock<() => void>;
+  let onCreate: Mock;
+  let onCreateFolder: Mock;
+  let onSwitchDirectory: Mock;
   const searchRef = createRef<HTMLInputElement>();
   const render = () => act(() => root.render(createElement(Sidebar, {
     workspace, selectedPath, connected: true, mobileOpen: false,
     onSelect, onClose, onCollapse: vi.fn(), onDirectory: vi.fn(),
-    onCreate: vi.fn(), onImport: vi.fn(), onHelp: vi.fn(), searchRef,
+    onCreate, onCreateFolder, onSwitchDirectory, onImport: vi.fn(), onHelp: vi.fn(), searchRef,
   })));
   const byPath = (selector: string, path: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)].find((el) => el.title === path);
   const folder = (path: string) => byPath('.folder-heading', path);
@@ -51,6 +54,7 @@ describe('workspace article navigation', () => {
     selectedPath = '根目录.md';
     onSelect = vi.fn();
     onClose = vi.fn();
+    onCreate = vi.fn(); onCreateFolder = vi.fn(); onSwitchDirectory = vi.fn();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -71,6 +75,43 @@ describe('workspace article navigation', () => {
     expect(folder(course)!.querySelector('small')!.textContent).toBe('5');
     const directFiles = [...folder(phase)!.parentElement!.querySelectorAll(':scope > ul > li > .article-item')];
     expect(directFiles.map((el) => el.getAttribute('title'))).toEqual([`${phase}/1.2_ 字符串.md`, `${phase}/1.10_ 异常处理.md`]);
+  });
+
+  it('shows Chinese stages in numeric order while keeping folders before articles', () => {
+    const names = ['阶段一：Python编程基础', '阶段二：计算机与开发工具基础', '阶段四：AI - 机器学习基础概念', '阶段五：大语言模型与 Prompt Engineering', '阶段六：AI Agent 核心技术', '阶段十：综合项目'];
+    workspace = { ...workspace, directories: [...names].reverse().map((name) => `${course}/${name}`) };
+    render();
+    const children = folder(course)!.parentElement!.querySelectorAll(':scope > ul > li > .folder-heading');
+    expect([...children].map((node) => node.textContent!.replace(/\d+$/, ''))).toEqual(names);
+    expect(folder(course)!.parentElement!.querySelector(':scope > ul > li:last-child > .article-item')?.getAttribute('title')).toBe(`${course}/大纲.md`);
+  });
+
+  it('creates articles and folders beside their exact destination without toggling the folder', () => {
+    click(folder(phase));
+    const actions = folder(phase)!.parentElement!.querySelector('.folder-actions')!;
+    click(actions.querySelector<HTMLButtonElement>('button[aria-label$="中新建文章"]')!);
+    expect(onCreate).toHaveBeenLastCalledWith(phase, workspace.directory);
+    expect(folder(phase)!.getAttribute('aria-expanded')).toBe('true');
+    click(actions.querySelector<HTMLButtonElement>('button[aria-label$="中新建子文件夹"]')!);
+    expect(onCreateFolder).toHaveBeenLastCalledWith(phase, workspace.directory);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('lists saved workspace folders and sends the correct root for switching and quick creation', () => {
+    workspace = { ...workspace, folders: [{ directory: workspace.directory, name: 'articles' }, { directory: 'D:/other', name: '另一个文件夹' }] };
+    render();
+    const other = byPath('.workspace-heading', 'D:/other')!;
+    expect(other.getAttribute('aria-expanded')).toBe('false');
+    click(other);
+    expect(onSwitchDirectory).toHaveBeenCalledWith('D:/other');
+    click(other.parentElement!.querySelector<HTMLButtonElement>('button[aria-label$="中新建文章"]')!);
+    expect(onCreate).toHaveBeenCalledWith('', 'D:/other');
+    const active = byPath('.workspace-heading', workspace.directory)!;
+    click(active);
+    expect(active.getAttribute('aria-expanded')).toBe('false');
+    expect(article('根目录.md')).toBeUndefined();
+    click(active);
+    expect(article('根目录.md')).toBeDefined();
   });
 
   it('folds entire subtrees and preserves independent child and sibling expansion', () => {

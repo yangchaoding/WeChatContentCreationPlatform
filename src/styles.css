@@ -48,6 +48,49 @@
 .folder-heading>svg,.folder-heading>small,.article-item>svg{flex-shrink:0}
 .folder-heading>span{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
 
+/* Folder workspaces keep creation actions beside their destination. */
+.sidebar .workspace-label{margin:20px 18px 10px}
+.add-workspace-button{display:flex;align-items:center;gap:9px;margin:0 12px 14px;padding:9px 10px;border-radius:7px;text-align:left;color:#4c6450;font-size:12px;min-height:36px;flex-shrink:0}
+.add-workspace-button:hover:not(:disabled){background:#e9f0e5}
+.add-workspace-button>span{flex:1}
+.add-workspace-button>svg:last-child{color:#91a189}
+.sidebar .search-field{margin:0 14px 16px}
+.workspace-list-label{display:flex;justify-content:space-between;align-items:center;margin:0 20px 7px;font-size:10px;color:#879580}
+.workspace-list-label small{font-size:10px}
+.workspace-group{margin-bottom:8px;min-width:0}
+.workspace-folder-row,.article-folder{position:relative}
+.workspace-folder-row{margin-bottom:4px;border-radius:6px}
+.workspace-group.is-active>.workspace-folder-row{background:#eaf0e6}
+.workspace-heading{display:flex;align-items:center;gap:6px;width:100%;min-height:38px;padding:8px 59px 8px 6px;text-align:left;font-size:12px;font-weight:550;color:#4b6349;border-radius:6px}
+.workspace-heading:hover{background:#e4ecde}
+.workspace-heading>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.workspace-heading>svg{flex-shrink:0}
+.folder-actions{position:absolute;right:3px;top:4px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none;transition:opacity .12s ease}
+.workspace-folder-row:hover>.folder-actions,.folder-heading:hover+.folder-actions,:is(.workspace-heading,.folder-heading):focus-visible+.folder-actions,.folder-actions:hover,.folder-actions:has(:focus-visible){opacity:1;pointer-events:auto}
+@media(hover:none),(pointer:coarse){.folder-actions{opacity:1;pointer-events:auto}}
+.folder-actions .icon-button{width:25px;height:29px;color:#91a18a}
+.folder-actions .icon-button:hover:not(:disabled),.folder-actions .icon-button:focus-visible{color:#3f6a47;background:#dfe9d9}
+.article-folder>.folder-actions{top:2px}
+.sidebar .folder-heading{padding-right:57px;margin:0;min-height:34px}
+.sidebar .folder-heading>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar .folder-heading>small{font-size:9px}
+.sidebar .article-item,.sidebar .article-item.in-folder{min-height:36px;padding-top:7px;padding-bottom:7px;margin-bottom:2px;gap:7px}
+.sidebar .article-item small{display:none}
+.sidebar .article-item strong{font-size:11px;font-weight:400}
+.sidebar .article-item.active strong{font-weight:550}
+.sidebar .active-file-dot{top:16px}
+.sidebar .list-empty{padding:22px 8px;gap:8px;text-align:center}
+.sidebar .list-empty small{line-height:1.8}
+.sidebar .sidebar-actions{padding-top:8px;padding-bottom:12px}
+.folder-location-label{display:block;margin-top:23px}
+.folder-source-card{border:1px solid #e1e7dd;border-radius:10px;background:#fafcf8;padding:20px;display:flex;flex-direction:column;align-items:center;gap:18px;min-height:128px;justify-content:center}
+.folder-source-card>p{font-size:12px;color:#8c9985}
+.folder-source-path{display:flex;gap:12px;align-items:center;max-width:100%;color:#7f9471}
+.folder-source-path>svg{flex-shrink:0}
+.folder-source-path>div{min-width:0;display:flex;flex-direction:column;gap:6px}
+.folder-source-path strong{font-weight:550;font-size:13px;color:#4c6242;overflow-wrap:anywhere}
+.folder-source-path span{font-size:11px;color:#8b9a81;overflow-wrap:anywhere;line-height:1.7}
+
 /* Collapsible side panels leave the available width to the writing desk. */
 .default-theme-hint{font-size:10px;line-height:1.7;color:#899881;margin:-8px 0 14px}
 .theme-default-button{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;min-height:28px;border-top:1px solid #e7ecdf;background:#fafcf8;font-size:10px;color:#71865e}

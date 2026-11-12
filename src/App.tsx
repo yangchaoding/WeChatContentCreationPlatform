@@ -5,7 +5,7 @@ import ThemePanel from './components/ThemePanel';
 import Editor from './components/Editor';
 import Modal from './components/Modal';
 import ImageGenerationDialog from './components/ImageGenerationDialog';
-import { DirectoryDialog, ExtractDialog, HelpDialog, NewArticleDialog } from './components/Dialogs';
+import { FolderDialog, ExtractDialog, HelpDialog, NewArticleDialog } from './components/Dialogs';
 import { useWorkbench } from './hooks/useWorkbench';
 import { useSynchronizedScroll } from './hooks/useSynchronizedScroll';
 import { articleTitle, wordCount } from '../shared/document';
@@ -15,7 +15,7 @@ import { errorMessage } from './lib/api';
 
 interface Toast { id: number; message: string; kind: 'success' | 'error' | 'info' }
 type View = 'edit' | 'split' | 'preview';
-type Dialog = 'directory' | 'new' | 'extract' | 'help' | 'image' | null;
+type Dialog = 'directory' | 'folder' | 'new' | 'extract' | 'help' | 'image' | null;
 
 export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -29,6 +29,7 @@ export default function App() {
   const [view, setView] = useState<View>('preview');
   const [device, setDevice] = useState<'mobile' | 'desktop'>('mobile');
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [folderTarget, setFolderTarget] = useState<{ directory: string; folder: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [themesOpen, setThemesOpen] = useState(false);
@@ -109,12 +110,24 @@ export default function App() {
     catch (error) { notify(errorMessage(error), 'error'); }
   };
   const downloadDraft = () => { downloadFile(content, article?.name || `${title}.md`); setExportMenu(false); };
-  const showDialog = (value: Dialog) => { setDialog(value); setSidebarOpen(false); setThemesOpen(false); };
+  const showDialog = (value: Dialog) => {
+    if (value === 'new') setFolderTarget({ directory: workspace?.directory || '', folder: '' });
+    setToasts((previous) => previous.filter((toast) => toast.kind === 'error'));
+    setDialog(value); setSidebarOpen(false); setThemesOpen(false);
+  };
+  const openInFolder = async (value: 'new' | 'folder', folder = '', directory = workspace?.directory || '') => {
+    try {
+      if (directory !== workspace?.directory) await workbench.changeDirectory(directory, undefined, false);
+      showDialog(value);
+      setFolderTarget({ directory, folder });
+    } catch (error) { notify(errorMessage(error), 'error'); }
+  };
+  const targetLocation = folderTarget ? (folderTarget.folder ? `${folderTarget.directory.replace(/[/\\]+$/, '')}/${folderTarget.folder}` : folderTarget.directory) : workspace?.directory || '';
   const closeDialog = () => setDialog(null);
   const viewOptions: { id: View; label: string; icon: typeof Eye }[] = [{ id: 'edit', label: '编辑', icon: Code2 }, { id: 'split', label: '双栏', icon: PanelsTopLeft }, { id: 'preview', label: '预览', icon: Eye }];
 
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} onDragEnter={(event) => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); dragCount.current++; setDragging(true); } }} onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes('Files')) event.preventDefault(); }} onDragLeave={(event) => { if (Array.from(event.dataTransfer.types).includes('Files')) { dragCount.current--; if (dragCount.current <= 0) setDragging(false); } }} onDrop={(event) => { event.preventDefault(); setDragging(false); dragCount.current = 0; if (event.dataTransfer.files.length) void workbench.importArticles(Array.from(event.dataTransfer.files)); }}>
-    <Sidebar workspace={workspace} selectedPath={article?.path} connected={workbench.connected} mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onCollapse={() => setSidebarCollapsed(true)} onSelect={(path) => void workbench.selectArticle(path)} onDirectory={() => showDialog('directory')} onCreate={() => showDialog('new')} onImport={(files) => void workbench.importArticles(files)} onHelp={() => showDialog('help')} searchRef={searchRef} />
+    <Sidebar workspace={workspace} selectedPath={article?.path} connected={workbench.connected} mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onCollapse={() => setSidebarCollapsed(true)} onSelect={(path) => void workbench.selectArticle(path)} onDirectory={() => showDialog('directory')} onCreate={(folder, directory) => void openInFolder('new', folder, directory)} onCreateFolder={(folder, directory) => void openInFolder('folder', folder, directory)} onSwitchDirectory={(directory) => void workbench.changeDirectory(directory, undefined, false).catch((error) => notify(errorMessage(error), 'error'))} switching={workbench.switching} onImport={(files) => void workbench.importArticles(files)} onHelp={() => showDialog('help')} searchRef={searchRef} />
     <div className="app-main"><header className="topbar"><div className="breadcrumbs"><button className="icon-button sidebar-toggle" onClick={() => setSidebarCollapsed((value) => !value)} title={sidebarCollapsed ? '展开工作空间' : '收起工作空间'} aria-label={sidebarCollapsed ? '展开工作空间' : '收起工作空间'} aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar">{sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}</button><button className="icon-button library-toggle" onClick={() => setSidebarOpen((value) => !value)} aria-label="打开文章库" aria-expanded={sidebarOpen} aria-controls="workspace-sidebar"><PanelLeft size={19} /></button><LayoutDashboard size={15} /><span>工作空间</span><ChevronRight size={13} /><strong>文章排版</strong></div><span className="topbar-motto">让文字，自成风格<span>✧</span></span><div className="topbar-end"><span className="local-badge"><span /> 本地工作台</span><button className="icon-button" title="使用指南" aria-label="打开使用指南" onClick={() => showDialog('help')}><CircleHelp size={18} strokeWidth={1.5} /></button><span className="user-avatar" aria-hidden="true">墨</span></div></header>
       <div className="content-layout"><main className="workbench">
         <div className="document-header"><div className="document-heading"><div className="document-heading-line"><span className="document-icon"><FileText size={18} strokeWidth={1.5} /></span><h1 title={title}>{article ? title : '让好内容，从这里开始'}</h1></div><div className="document-subline"><span>{article?.path || '你的 Markdown 创作空间'}</span>{article && <><i /> <span className={`save-state state-${workbench.saveStatus}`}>{workbench.saveStatus === 'saving' ? <LoaderCircle size={11} className="spin" /> : workbench.saveStatus === 'saved' ? <CheckCheck size={12} /> : workbench.saveStatus === 'error' ? <span className="error-dot" /> : <span className="pending-dot" />}{({ saved: '已自动保存', pending: '等待保存', saving: '正在保存', error: '保存遇到问题' })[workbench.saveStatus]}</span></>}</div></div>
@@ -129,8 +142,9 @@ export default function App() {
         <footer className="statusbar"><div><span><AlignLeft size={12} /> {words.toLocaleString()} 字</span><i /><span>约 {Math.max(1, Math.ceil(words / 350))} 分钟阅读</span>{workspace?.truncated && <span className="status-warning">部分大文件或深层目录未载入</span>}</div><div>{rendered.localImages > 0 ? <span className="status-warning">{rendered.localImages} 张本地图片 · 复制时嵌入 PNG</span> : <span className="wechat-ready"><ShieldCheck size={12} /> 为公众号阅读而设计</span>}<span className="status-version">MOPAI 1.0</span></div></footer>
       </main><ThemePanel themes={themes} selected={theme} settings={settings} onSelect={workbench.selectTheme} onSettings={workbench.setSettings} onExtract={() => showDialog('extract')} onDelete={setPendingDelete} defaultThemeId={workbench.defaultThemeId} onSetDefault={(theme) => void workbench.setDefaultTheme(theme)} savingDefaultThemeId={workbench.savingDefaultThemeId} open={themesOpen} onClose={() => setThemesOpen(false)} /></div>
     </div>
-    {dialog === 'directory' && <DirectoryDialog directory={workspace?.directory || ''} onSelect={workbench.changeDirectory} onClose={closeDialog} />}
-    {dialog === 'new' && <NewArticleDialog directory={workspace?.directory || ''} onCreate={async (name) => { await workbench.createArticle(name); setView('split'); }} onClose={closeDialog} />}
+    {dialog === 'directory' && <FolderDialog directory={workspace?.directory || ''} onSelect={workbench.changeDirectory} onCreate={async (name, parent) => workbench.changeDirectory(parent, name)} onClose={closeDialog} />}
+    {dialog === 'folder' && folderTarget && <FolderDialog directory={targetLocation} nested onCreate={async (name) => workbench.createFolder(name, folderTarget.folder, folderTarget.directory)} onClose={closeDialog} />}
+    {dialog === 'new' && <NewArticleDialog directory={targetLocation} onCreate={async (name) => { await workbench.createArticle(name, folderTarget?.folder, folderTarget?.directory); setView('split'); }} onClose={closeDialog} />}
     {dialog === 'extract' && <ExtractDialog onApply={workbench.addTheme} onClose={closeDialog} />}
     {dialog === 'image' && article && workspace && <ImageGenerationDialog directory={workspace.directory} articlePath={article.path} content={content} onInsert={workbench.insertGeneratedCover} onClose={closeDialog} />}
     {dialog === 'help' && <HelpDialog onClose={closeDialog} />}

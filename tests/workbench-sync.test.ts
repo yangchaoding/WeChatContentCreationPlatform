@@ -62,6 +62,38 @@ describe('workbench change notifications', () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(workbench.connected).toBe(true);
   });
+  it('saves the current draft before creating an article in a nested target folder', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url, options = {}) => {
+      if (String(url) === '/api/articles') {
+        const body = JSON.parse(String(options.body));
+        return Response.json({ ...article, path: body.path, name: '新文章.md', content: body.content, revision: 'new' });
+      }
+      return originalFetch(url, options);
+    });
+    await run(() => workbench.setContent('# 保留当前草稿'));
+    await run(() => workbench.createArticle('新文章', '课程/练习', 'D:/articles'));
+    const writes = vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === 'PUT' || options?.method === 'POST');
+    expect(writes.map(([url]) => url)).toEqual(['/api/article', '/api/articles']);
+    const created = JSON.parse(String(writes[1][1]!.body));
+    expect(created.path).toBe('课程/练习/新文章.md');
+    expect(created.content).toContain('# 新文章\n');
+    expect(created.content).not.toContain('课程/练习');
+    expect(article.content).toBe('# 保留当前草稿');
+    expect(workbench.article?.path).toBe('课程/练习/新文章.md');
+    expect(workbench.workspace?.articles.some((item) => item.path === '课程/练习/新文章.md')).toBe(true);
+  });
+  it('rejects stale creation targets and preserves the draft when saving fails', async () => {
+    await run(() => expect(workbench.createArticle('新文章', '', 'D:/different')).rejects.toThrow('已切换'));
+    await run(() => expect(workbench.createFolder('新目录', '', 'D:/different')).rejects.toThrow('已切换'));
+    expect(fetch).not.toHaveBeenCalled();
+    await run(() => workbench.setContent('# 未保存草稿'));
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ message: '保存冲突', code: 'FILE_CONFLICT' }, { status: 409 }));
+    await run(() => expect(workbench.createArticle('新文章', '课程')).rejects.toThrow('保存问题'));
+    expect(count('articles')).toBe(0);
+    expect(workbench.content).toBe('# 未保存草稿');
+    expect(workbench.switching).toBe(false);
+  });
   it('refreshes only the changed resource and coalesces bursts', async () => {
     await run(() => { for (let i = 0; i < 8; i++) events.message('files-changed'); });
     await advance(250);

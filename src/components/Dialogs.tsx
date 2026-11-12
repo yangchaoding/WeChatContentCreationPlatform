@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, ChevronRight, ClipboardCheck, Code2, FileCode2, FileText, Folder, FolderOpen, Globe, HardDrive, Info, Link2, LoaderCircle, Plus, Search, Sparkles, Upload } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, ClipboardCheck, Code2, FileCode2, FileText, Folder, FolderOpen, FolderPlus, Globe, HardDrive, Info, Link2, LoaderCircle, Plus, Search, Sparkles, Upload } from 'lucide-react';
 import type { DirectoryListing, Theme } from '../../shared/types';
 import { api, errorMessage, query } from '../lib/api';
 import Modal from './Modal';
@@ -25,8 +25,8 @@ export function DirectoryDialog({ directory, onSelect, onClose }: { directory: s
     finally { if (request === requestNumber.current) setLoading(false); }
   };
   useEffect(() => { void browse(directory); }, [directory]);
-  const select = async () => { setSaving(true); setError(''); try { await onSelect(input.trim()); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setSaving(false); } };
-  return <Modal title="连接你的文章目录" subtitle="把文章放进文件夹，剩下的交给墨排。" onClose={onClose} busy={saving} wide footer={<><span className="footer-hint"><HardDrive size={14} /> 文件始终保存在你的电脑上</span><button className="button button-secondary" onClick={onClose} disabled={saving}>取消</button><button className="button button-primary" onClick={() => void select()} disabled={saving || !input.trim()}>{saving ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />} 使用此目录</button></>}>
+  const select = async () => { if (saving || loading) return; setSaving(true); setError(''); try { const checked = await api<DirectoryListing>(`/directories?${query({ path: input.trim() })}`); await onSelect(checked.path); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setSaving(false); } };
+  return <Modal title="选择本地文件夹" subtitle="浏览电脑上的文件夹，或输入完整路径。" onClose={onClose} busy={saving} wide footer={<><span className="footer-hint"><HardDrive size={14} /> 文件始终保存在你的电脑上</span><button className="button button-secondary" onClick={onClose} disabled={saving}>取消</button><button className="button button-primary" onClick={() => void select()} disabled={saving || loading || !input.trim()}>{saving ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />} 选择此文件夹</button></>}>
     <form className="directory-path" onSubmit={(event) => { event.preventDefault(); void browse(input); }}><Folder size={17} /><input aria-label="本地目录路径" value={input} onChange={(event) => setInput(event.target.value)} placeholder="输入完整的本地目录路径" data-autofocus /><button className="button button-secondary" type="submit" disabled={loading}><ArrowRight size={15} /> 前往</button></form>
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="directory-browser"><div className="directory-bookmarks"><span>快速访问</span>{listing?.bookmarks.map((bookmark) => <button key={bookmark.name} className={listing.path === bookmark.path ? 'active' : ''} onClick={() => void browse(bookmark.path)}><Folder size={15} />{bookmark.name}</button>)}</div><div className="directory-contents"><div className="directory-toolbar"><button className="text-button" disabled={!listing?.parent || loading} onClick={() => listing?.parent && void browse(listing.parent)}><ArrowLeft size={14} /> 上一级</button><small>{listing?.directories.length || 0} 个文件夹</small></div><div className="directory-list">{loading ? <div className="loading-placeholder"><LoaderCircle size={24} className="spin" /><span>正在读取目录…</span></div> : listing?.directories.length ? listing.directories.map((child) => <button key={child.path} onClick={() => void browse(child.path)}><Folder size={18} /><span>{child.name}</span><ChevronRight size={14} /></button>) : <div className="directory-empty"><FolderOpen size={28} strokeWidth={1.4} /><p>没有子文件夹</p><small>可以直接使用当前目录</small></div>}</div></div></div>
@@ -34,11 +34,45 @@ export function DirectoryDialog({ directory, onSelect, onClose }: { directory: s
   </Modal>;
 }
 
+export function FolderDialog({ directory, nested = false, onCreate, onSelect, onClose }: { directory: string; nested?: boolean; onCreate: (name: string, parent: string) => Promise<void>; onSelect?: (directory: string) => Promise<void>; onClose: () => void }) {
+  const [mode, setMode] = useState<'new' | 'existing'>('new');
+  const [name, setName] = useState('');
+  const [parent, setParent] = useState(directory);
+  const [existing, setExisting] = useState('');
+  const [browsing, setBrowsing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const location = mode === 'new' ? parent : existing;
+  const submit = async () => {
+    if (busy || !location || (mode === 'new' && !name.trim())) return;
+    setBusy(true); setError('');
+    try {
+      if (mode === 'new') await onCreate(name.trim(), parent); else await onSelect?.(existing);
+      onClose();
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setBusy(false); }
+  };
+  if (browsing) return <DirectoryDialog directory={location || directory} onSelect={async (selected) => { if (mode === 'new') setParent(selected); else setExisting(selected); }} onClose={() => setBrowsing(false)} />;
+  return <Modal title={nested ? '新建子文件夹' : '添加文件夹'} subtitle={nested ? '在当前文件夹里整理你的文章。' : '将文章按文件夹整理，随时切换创作。'} onClose={onClose} busy={busy} footer={<><button className="button button-secondary" onClick={onClose} disabled={busy}>取消</button><button className="button button-primary" onClick={() => void submit()} disabled={busy || !location || (mode === 'new' && !name.trim())}>{busy ? <LoaderCircle size={15} className="spin" /> : mode === 'new' ? <FolderPlus size={15} /> : <FolderOpen size={15} />}{mode === 'new' ? '创建文件夹' : '添加文件夹'}</button></>}>
+    {!nested && <div className="source-tabs" role="tablist" aria-label="添加文件夹方式"><button role="tab" aria-selected={mode === 'new'} className={mode === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setMode('new'); setError(''); }}><FolderPlus size={16} />新建文件夹</button><button role="tab" aria-selected={mode === 'existing'} className={mode === 'existing' ? 'active' : ''} disabled={busy} onClick={() => { setMode('existing'); setError(''); }}><FolderOpen size={16} />选择已有文件夹</button></div>}
+    <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      {mode === 'new' && <><label className="field-label" htmlFor="folder-name">文件夹名称</label><div className="filename-field"><Folder size={18} /><input id="folder-name" data-autofocus value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Python 学习笔记" maxLength={100} disabled={busy} /></div></>}
+      <label className="field-label folder-location-label">{mode === 'new' ? '存放位置' : '源文件夹'}</label>
+      <div className="folder-source-card">
+        {location ? <div className="folder-source-path"><FolderOpen size={22} /><div><strong>{location.split(/[/\\]/).filter(Boolean).at(-1) || location}</strong><span title={location}>{location}</span></div></div> : <p>在此电脑上选择已有文件夹</p>}
+        {!nested && <button type="button" className="button button-secondary" onClick={() => setBrowsing(true)} disabled={busy}><FolderOpen size={15} />{location ? '选择位置' : '选择文件夹'}</button>}
+      </div>
+      <p className="field-help">{mode === 'new' ? '创建后，可点击文件夹名称右侧的写作图标新建文章。' : '直接连接原文件夹，读取其中的 Markdown 文章。'}</p>
+    </form>
+    {error && <div className="inline-error" role="alert">{error}</div>}
+  </Modal>;
+}
+
 export function NewArticleDialog({ directory, onCreate, onClose }: { directory: string; onCreate: (name: string) => Promise<void>; onClose: () => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const create = async () => { if (!name.trim()) return; setBusy(true); setError(''); try { await onCreate(name.trim()); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); } };
+  const create = async () => { if (busy || !name.trim()) return; setBusy(true); setError(''); try { await onCreate(name.trim()); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); } };
   return <Modal title="新的一页，新的灵感" subtitle="好文章，从一个名字开始。" onClose={onClose} busy={busy} footer={<><button className="button button-secondary" onClick={onClose} disabled={busy}>取消</button><button className="button button-primary" disabled={!name.trim() || busy} onClick={() => void create()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} 创建文章</button></>}>
     <form onSubmit={(event) => { event.preventDefault(); void create(); }}><label className="field-label" htmlFor="article-name">文章名称</label><div className="filename-field"><FileText size={17} /><input id="article-name" data-autofocus value={name} onChange={(event) => setName(event.target.value)} placeholder="给这次创作起个名字" maxLength={100} /><span>.md</span></div><p className="field-help">保存在 <span className="path-text">{directory}</span></p></form>{error && <div className="inline-error" role="alert">{error}</div>}
   </Modal>;

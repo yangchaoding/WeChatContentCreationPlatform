@@ -31,6 +31,77 @@ afterEach(async () => {
 });
 
 describe('Local workspace API', () => {
+  it('uses Chinese numeric ordering consistently for scanned folders and the folder picker', async () => {
+    const stages = ['阶段一：Python', '阶段二：开发工具', '阶段四：机器学习', '阶段十：项目'];
+    for (const name of [...stages].reverse()) await fs.mkdir(path.join(articles, name));
+    const scanned = (await request(instance.app).get('/api/workspace').expect(200)).body;
+    expect(scanned.directories.filter((name: string) => name.startsWith('阶段'))).toEqual(stages);
+    const picker = (await request(instance.app).get('/api/directories').query({ path: articles }).expect(200)).body;
+    expect(picker.directories.map((item: { name: string }) => item.name).filter((name: string) => name.startsWith('阶段'))).toEqual(stages);
+  });
+  it('remembers multiple local folders without duplicates and restores them after restart', async () => {
+    const other = path.join(temporary, 'existing');
+    await fs.mkdir(other);
+    await fs.writeFile(path.join(other, 'existing.md'), '# Existing');
+    await request(instance.app).post('/api/workspace').send({ directory: other }).expect(200);
+    await request(instance.app).post('/api/workspace').send({ directory: articles }).expect(200);
+    const result = await request(instance.app).post('/api/workspace').send({ directory: other }).expect(200);
+    expect(result.body.folders.map((folder: { directory: string }) => folder.directory)).toEqual([articles, other]);
+    expect(result.body.articles[0].path).toBe('existing.md');
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    expect((await instance.service.list()).folders).toEqual(result.body.folders);
+    expect(instance.service.directory).toBe(other);
+    expect(await fs.readFile(path.join(other, 'existing.md'), 'utf8')).toBe('# Existing');
+  });
+  it('migrates the previous single-folder settings without losing theme preferences', async () => {
+    await instance.service.saveSettings('article.md', defaultSettings());
+    const statePath = path.join(temporary, 'state', 'state.json');
+    const saved = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    delete saved.folders;
+    await fs.writeFile(statePath, JSON.stringify(saved));
+    await instance.close();
+    instance = await createLocalApp({ storageDirectory: path.join(temporary, 'state'), initialDirectory: articles });
+    expect((await instance.service.list()).folders).toEqual([{ directory: articles, name: 'articles' }]);
+    expect((await instance.service.read('article.md')).settings).toEqual(defaultSettings());
+  });
+  it('creates a new workspace folder in the chosen parent and never reuses or overwrites an existing folder', async () => {
+    const created = await request(instance.app).post('/api/workspace').send({ directory: temporary, createName: '写作项目' }).expect(200);
+    const destination = path.join(temporary, '写作项目');
+    expect(created.body.directory).toBe(destination);
+    expect(created.body.folders).toContainEqual({ directory: destination, name: '写作项目' });
+    expect(created.body.articles).toEqual([]);
+    await fs.writeFile(path.join(destination, '保留.md'), '# 保留');
+    await request(instance.app).post('/api/workspace').send({ directory: temporary, createName: '写作项目' }).expect(409);
+    expect(await fs.readFile(path.join(destination, '保留.md'), 'utf8')).toBe('# 保留');
+  });
+  it('creates nested folders and same-named articles in their exact destination', async () => {
+    const folder = await request(instance.app).post('/api/folders').send({ directory: articles, parent: 'notes', name: '新课程' }).expect(201);
+    expect(folder.body.path).toBe('notes/新课程');
+    expect((await instance.service.list()).directories).toContain('notes/新课程');
+    await request(instance.app).post('/api/articles').send({ directory: articles, path: 'notes/新课程/article.md', content: '# Nested new' }).expect(201);
+    expect(await fs.readFile(path.join(articles, 'notes', '新课程', 'article.md'), 'utf8')).toBe('# Nested new');
+    expect(await fs.readFile(path.join(articles, 'article.md'), 'utf8')).toContain('Original content');
+    await request(instance.app).post('/api/folders').send({ parent: 'notes', name: '新课程' }).expect(409);
+  });
+  it('rejects invalid folder names, hidden destinations and paths outside the current workspace', async () => {
+    for (const name of ['', '..', '../escape', 'a/b', 'a\\b', 'CON', 'bad.', '.hidden', 'node_modules', 'bad:name']) {
+      await request(instance.app).post('/api/folders').send({ parent: '', name }).expect(400);
+      await request(instance.app).post('/api/workspace').send({ directory: temporary, createName: name }).expect(400);
+    }
+    await request(instance.app).post('/api/folders').send({ parent: '../', name: 'escape' }).expect(403);
+    await request(instance.app).post('/api/folders').send({ parent: '.hidden', name: 'invisible' }).expect(400);
+    await request(instance.app).post('/api/folders').send({ parent: 'missing', name: 'child' }).expect(404);
+    await request(instance.app).post('/api/folders').send({ directory: temporary, parent: '', name: 'stale' }).expect(409);
+    expect(instance.service.directory).toBe(articles);
+  });
+  it('rejects creating a subfolder through a link outside the workspace', async () => {
+    const outside = path.join(temporary, 'outside');
+    await fs.mkdir(outside);
+    await fs.symlink(outside, path.join(articles, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    await request(instance.app).post('/api/folders').send({ parent: 'linked', name: 'escaped' }).expect(403);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
   it('scans nested Markdown articles and excludes hidden and non-Markdown files', async () => {
     const response = await request(instance.app).get('/api/workspace').expect(200);
     expect(response.body.articles.map((article: { path: string }) => article.path).sort()).toEqual(['article.md', 'notes/nested.md']);

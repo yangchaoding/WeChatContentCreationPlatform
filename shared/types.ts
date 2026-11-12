@@ -64,6 +64,7 @@ export interface Workspace {
   directories: string[];
   articles: ArticleSummary[];
   truncated: boolean;
+  folders?: { directory: string; name: string }[];
 }
 
 export interface DirectoryListing {

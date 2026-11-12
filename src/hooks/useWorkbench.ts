@@ -330,28 +330,49 @@ export function useWorkbench(notify: Notify) {
     finally { switchingRef.current = false; setSwitching(false); }
   }, [applyArticle, flush, notify]);
 
-  const changeDirectory = useCallback(async (directory: string) => {
-    if (!(await flush())) throw new Error('请先处理当前文章的保存问题，再切换目录。');
+  const changeDirectory = useCallback(async (directory: string, createName?: string, announce = true) => {
+    if (switchingRef.current) throw new Error('正在切换文件，请稍后重试。');
     switchingRef.current = true;
     setSwitching(true);
     try {
-      const root = await api<Workspace>('/workspace', { method: 'POST', body: { directory } });
+      if (!(await flush())) throw new Error('请先处理当前文章的保存问题，再切换目录。');
+      await refreshPromise.current;
+      const root = await api<Workspace>('/workspace', { method: 'POST', body: { directory, createName } });
       updateWorkspace(root);
+      applyArticle(null);
       await chooseInitial(root);
-      notify('已连接文章目录');
+      if (announce) notify(createName ? '文件夹已创建并添加到工作空间' : '已连接文章目录');
     } finally { switchingRef.current = false; setSwitching(false); }
-  }, [chooseInitial, flush, notify, updateWorkspace]);
+  }, [applyArticle, chooseInitial, flush, notify, updateWorkspace]);
 
-  const createArticle = useCallback(async (name: string) => {
-    if (!(await flush())) throw new Error('请先处理当前文章的保存问题。');
+  const createArticle = useCallback(async (name: string, folder = '', expectedDirectory?: string) => {
+    if (switchingRef.current) throw new Error('正在切换文件，请稍后重试。');
     const root = workspaceRef.current;
     if (!root) return;
+    if (expectedDirectory && expectedDirectory !== root.directory) throw new Error('当前文件夹已切换，请重新打开新建文章窗口。');
+    if (/[/\\]/.test(name) || !name.trim() || name.startsWith('.')) throw new Error('请输入文章名称，不要包含文件夹路径或以点开头。');
     const filename = /\.md$/i.test(name) ? name : `${name}.md`;
-    const created = await api<Article>('/articles', { method: 'POST', body: { path: filename, content: `# ${filename.replace(/\.md$/i, '')}\n\n从这里，写下你的第一句话。\n`, directory: root.directory } });
-    applyArticle(created, root.directory);
-    await refresh();
-    notify('新文章已创建');
-  }, [applyArticle, flush, notify, refresh]);
+    switchingRef.current = true;
+    setSwitching(true);
+    try {
+      if (!(await flush())) throw new Error('请先处理当前文章的保存问题。');
+      await refreshPromise.current;
+      const created = await api<Article>('/articles', { method: 'POST', body: { path: folder ? `${folder}/${filename}` : filename, content: `# ${filename.replace(/\.md$/i, '')}\n\n从这里，写下你的第一句话。\n`, directory: root.directory } });
+      applyArticle(created, root.directory);
+      const latest = workspaceRef.current || root;
+      updateWorkspace({ ...latest, articles: [...latest.articles.filter((item) => item.path !== created.path), created] });
+      notify('新文章已创建');
+    } finally { switchingRef.current = false; setSwitching(false); }
+  }, [applyArticle, flush, notify, updateWorkspace]);
+
+  const createFolder = useCallback(async (name: string, parent = '', expectedDirectory?: string) => {
+    if (switchingRef.current) throw new Error('正在切换文件，请稍后重试。');
+    const root = workspaceRef.current;
+    if (!root || (expectedDirectory && expectedDirectory !== root.directory)) throw new Error('当前文件夹已切换，请重新打开新建文件夹窗口。');
+    const folder = await api<{ path: string }>('/folders', { method: 'POST', body: { directory: root.directory, parent, name } });
+    if (workspaceRef.current?.directory === root.directory) updateWorkspace({ ...workspaceRef.current, directories: [...new Set([...workspaceRef.current.directories, folder.path])] });
+    notify('子文件夹已创建');
+  }, [notify, updateWorkspace]);
 
   const importArticles = useCallback(async (files: File[]) => {
     if (!(await flush())) return;
@@ -418,5 +439,5 @@ export function useWorkbench(notify: Notify) {
     setContent(insertCover(contentRef.current, cover.markdownPath));
   }, [setContent]);
 
-  return { workspace, article, content, setContent, insertGeneratedCover, settings, setSettings, themes, defaultThemeId, savingDefaultThemeId, setDefaultTheme, theme: themes.find((item) => item.id === settings.themeId) || themes.find((item) => item.id === defaultThemeId) || systemDefaultTheme, loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
+  return { workspace, article, content, setContent, insertGeneratedCover, settings, setSettings, themes, defaultThemeId, savingDefaultThemeId, setDefaultTheme, theme: themes.find((item) => item.id === settings.themeId) || themes.find((item) => item.id === defaultThemeId) || systemDefaultTheme, loading, connected, loadError, saveStatus, saveError, switching, initialize, refresh, flush, selectArticle, changeDirectory, createArticle, createFolder, importArticles, selectTheme, addTheme, deleteTheme, retrySave, reloadArticle };
 }

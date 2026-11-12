@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { articleTitle } from '../shared/document';
+import { compareNames } from '../shared/name-order';
 import { builtInThemes, systemDefaultTheme } from '../shared/themes';
 import type { Article, ArticleSettings, ArticleSummary, DirectoryListing, Theme, ThemeLibrary, Workspace } from '../shared/types';
 
@@ -11,12 +12,20 @@ export class AppError extends Error {
   constructor(public status: number, message: string, public code = 'ERROR') { super(message); }
 }
 
-interface State { directory: string; settings: Record<string, ArticleSettings>; themes: Theme[]; defaultThemeId: string }
+interface State { directory: string; folders: string[]; settings: Record<string, ArticleSettings>; themes: Theme[]; defaultThemeId: string }
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 const excluded = new Set(['node_modules', 'dist', 'build', 'vendor', '$RECYCLE.BIN', 'System Volume Information']);
 const inside = (root: string, target: string) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)); };
 const revision = (content: string) => createHash('sha256').update(content).digest('hex');
 const normalizePath = (value: string) => value.split(path.sep).join('/');
+const directoryKey = (value: string) => process.platform === 'win32' ? path.normalize(value).toLowerCase() : path.normalize(value);
+const uniqueDirectories = (values: string[]) => [...new Map(values.map((value) => [directoryKey(value), value])).values()];
+
+function validateFolderName(name: string) {
+  if (!name.trim() || name !== name.trim() || name.length > 100 || name.startsWith('.') || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(name) || excluded.has(name)) {
+    throw new AppError(400, '请输入 1–100 个字符的文件夹名称，不能包含路径分隔符、系统保留名称或以点开头。');
+  }
+}
 
 export class WorkspaceService {
   private state!: State;
@@ -31,13 +40,15 @@ export class WorkspaceService {
   async init() {
     await fs.mkdir(this.storageDirectory, { recursive: true });
     await fs.mkdir(this.initialDirectory, { recursive: true });
-    this.state = { directory: await fs.realpath(this.initialDirectory), settings: {}, themes: [], defaultThemeId: systemDefaultTheme.id };
+    const initial = await fs.realpath(this.initialDirectory);
+    this.state = { directory: initial, folders: [initial], settings: {}, themes: [], defaultThemeId: systemDefaultTheme.id };
     try {
       const saved = JSON.parse(await fs.readFile(path.join(this.storageDirectory, 'state.json'), 'utf8')) as State;
       if (saved && typeof saved.directory === 'string') {
         try { saved.directory = await this.checkDirectory(saved.directory); }
         catch { saved.directory = this.state.directory; }
-        this.state = { directory: saved.directory, settings: saved.settings || {}, themes: Array.isArray(saved.themes) ? saved.themes : [], defaultThemeId: typeof saved.defaultThemeId === 'string' ? saved.defaultThemeId : systemDefaultTheme.id };
+        const folders = Array.isArray(saved.folders) ? saved.folders.filter((item) => typeof item === 'string' && path.isAbsolute(item) && !item.includes('\0')) : [];
+        this.state = { directory: saved.directory, folders: uniqueDirectories([...folders, saved.directory]), settings: saved.settings || {}, themes: Array.isArray(saved.themes) ? saved.themes : [], defaultThemeId: typeof saved.defaultThemeId === 'string' ? saved.defaultThemeId : systemDefaultTheme.id };
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new AppError(500, '本地设置文件无法读取。请检查 .mopai/state.json 后重新启动。');
@@ -86,8 +97,36 @@ export class WorkspaceService {
 
   async setDirectory(directory: string) {
     const resolved = await this.checkDirectory(directory);
-    await this.persist(() => { this.state.directory = resolved; });
+    await this.persist(() => {
+      this.state.folders = uniqueDirectories([...this.state.folders, resolved]);
+      this.state.directory = resolved;
+    });
     return this.list();
+  }
+
+  async createDirectory(parent: string, name: string) {
+    validateFolderName(name);
+    const resolved = await this.checkDirectory(parent);
+    const target = path.join(resolved, name);
+    try { await fs.mkdir(target); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new AppError(409, '已有同名文件或文件夹，请换一个名称。');
+      throw error;
+    }
+    return target;
+  }
+
+  async createFolder(parent: string, name: string) {
+    const root = this.directory;
+    if (path.isAbsolute(parent) || parent.includes('\0')) throw new AppError(400, '文件夹路径无效。');
+    const target = path.resolve(root, parent);
+    if (!inside(root, target)) throw new AppError(403, '文件夹必须位于当前文章目录中。');
+    const resolved = await this.checkDirectory(target);
+    if (!inside(root, resolved)) throw new AppError(403, '不能在文章目录外的链接文件夹中创建文件。');
+    const relative = normalizePath(path.relative(root, resolved));
+    if (relative.split('/').filter(Boolean).length >= 12 || relative.split('/').some((part) => part.startsWith('.') || excluded.has(part))) throw new AppError(400, '请选择文章库中可见的文件夹，最多支持 12 层子目录。');
+    const created = await this.createDirectory(resolved, name);
+    return { path: normalizePath(path.relative(root, created)), directory: created };
   }
 
   async resolveFile(relativePath: string, options: { creating?: boolean; markdown?: boolean; root?: string } = {}) {
@@ -115,7 +154,7 @@ export class WorkspaceService {
         if (directory === root) throw error;
         return [];
       });
-      entries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+      entries.sort((a, b) => compareNames(a.name, b.name));
       for (const entry of entries) {
         if (entry.name.startsWith('.') || excluded.has(entry.name) || entry.isSymbolicLink()) continue;
         const fullPath = path.join(directory, entry.name);
@@ -138,7 +177,7 @@ export class WorkspaceService {
       }
     };
     await walk(root, 0);
-    return { directory: root, name: path.basename(root) || root, directories, articles, truncated };
+    return { directory: root, name: path.basename(root) || root, directories, articles, truncated, folders: this.state.folders.map((directory) => ({ directory, name: path.basename(directory) || directory })) };
   }
 
   async read(relativePath: string, root = this.directory): Promise<Article> {
@@ -219,7 +258,7 @@ export class WorkspaceService {
     return {
       path: resolved,
       parent: path.dirname(resolved) === resolved ? null : path.dirname(resolved),
-      directories: children.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !excluded.has(entry.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).map((entry) => ({ name: entry.name, path: path.join(resolved, entry.name) })),
+      directories: children.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !excluded.has(entry.name)).sort((a, b) => compareNames(a.name, b.name)).map((entry) => ({ name: entry.name, path: path.join(resolved, entry.name) })),
       bookmarks: [{ name: '文章目录', path: this.directory }, { name: '项目目录', path: this.projectDirectory }, { name: '用户目录', path: os.homedir() }],
     };
   }

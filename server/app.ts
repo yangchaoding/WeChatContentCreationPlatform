@@ -112,10 +112,18 @@ export async function createLocalApp(options: { storageDirectory: string; initia
   app.get('/api/health', (_req, res) => res.json({ ok: true, version: '1.0.0' }));
   app.get('/api/workspace', asyncRoute(async (_req, res) => res.json(await service.list())));
   app.post('/api/workspace', asyncRoute(async (req, res) => {
-    const workspace = await service.setDirectory(textField(req.body?.directory, '目录路径'));
+    const directory = textField(req.body?.directory, '目录路径');
+    const target = req.body?.createName === undefined ? directory : await service.createDirectory(directory, textField(req.body.createName, '文件夹名称', 100));
+    const workspace = await service.setDirectory(target);
     await watchDirectory();
     broadcast('workspace-changed');
     res.json(workspace);
+  }));
+  app.post('/api/folders', asyncRoute(async (req, res) => {
+    checkScope(req);
+    const folder = await service.createFolder(textField(req.body?.parent ?? '', '上级文件夹'), textField(req.body?.name, '文件夹名称', 100));
+    broadcast('files-changed');
+    res.status(201).json(folder);
   }));
   app.get('/api/directories', asyncRoute(async (req, res) => res.json(await service.directories(typeof req.query.path === 'string' ? req.query.path : undefined))));
   app.get('/api/events', (req, res) => {
